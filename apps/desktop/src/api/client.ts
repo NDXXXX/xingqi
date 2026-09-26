@@ -1,4 +1,4 @@
-import type { Character, CharacterPayload, Conversation, Memory, MemoryPayload, Message, Provider, Skill } from '../types'
+import type { Character, CharacterPayload, Conversation, McpServer, Memory, MemoryPayload, Message, Provider, Skill } from '../types'
 
 const BACKEND_URL = 'http://127.0.0.1:8001'
 
@@ -81,6 +81,20 @@ export const api = {
 
   listSkills: () => request<Skill[]>('/api/skills'),
   reloadSkills: () => request<Skill[]>('/api/skills/reload', { method: 'POST' }),
+
+  listMcp: () => request<McpServer[]>('/api/mcp'),
+  connectMcp: (body: { name: string; command: string; args: string[] }) =>
+    request<McpServer[]>('/api/mcp/connect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  disconnectMcp: (name: string) =>
+    request<McpServer[]>('/api/mcp/disconnect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    }),
 
   async chatStream(
     body: ChatRequest,

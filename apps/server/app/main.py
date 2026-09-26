@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .api.chat import router as chat_router
 from .api.characters import router as characters_router
 from .api.conversations import router as conversations_router
+from .api.mcp import router as mcp_router
 from .api.memories import router as memories_router
 from .api.providers import router as providers_router
 from .api.skills import router as skills_router
@@ -34,6 +35,7 @@ app.include_router(providers_router)
 app.include_router(characters_router)
 app.include_router(memories_router)
 app.include_router(skills_router)
+app.include_router(mcp_router)
 app.include_router(chat_router)
 
 # 本地单进程应用：启动时建表（幂等）。

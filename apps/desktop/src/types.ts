@@ -97,3 +97,11 @@ export interface Skill {
   content: string
   path: string
 }
+
+export interface McpServer {
+  name: string
+  command: string
+  args: string[]
+  connected: boolean
+  tools: string[]
+}

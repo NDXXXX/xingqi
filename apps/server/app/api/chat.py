@@ -19,9 +19,10 @@ from ..database.repositories.memory_repository import MemoryRepository
 from ..database.repositories.provider_repository import ProviderRepository
 from ..memory.manager import MemoryManager
 from ..memory.retriever import retrieve
+from ..mcp.manager import default_manager as mcp_manager
 from ..providers.router import provider_router
 from ..skills.registry import default_registry as skill_registry
-from ..tools.registry import default_registry
+from ..tools.registry import ToolRegistry, default_registry
 from .conversations import MessageOut
 
 logger = logging.getLogger(__name__)
@@ -102,6 +103,13 @@ def _prepare(db: Session, req: ChatRequest):
     return conversation, provider, model, llm_messages, user_message_out
 
 
+def _build_registry() -> ToolRegistry:
+    registry = _build_registry()
+    for tool in mcp_manager.tools():
+        registry.register(tool)
+    return registry
+
+
 def _chunk(text: str):
     return [text[i : i + CHUNK_SIZE] for i in range(0, len(text), CHUNK_SIZE)]
 
@@ -110,7 +118,7 @@ def _chunk(text: str):
 async def chat(req: ChatRequest, db: Session = Depends(get_db)) -> dict:
     conversation, provider, model, llm_messages, user_message_out = _prepare(db, req)
     p = provider_router.get_provider(provider)
-    registry = default_registry()
+    registry = _build_registry()
 
     steps: list[dict] = []
     final_response = ""
@@ -138,7 +146,7 @@ async def chat(req: ChatRequest, db: Session = Depends(get_db)) -> dict:
 async def chat_stream(req: ChatRequest, db: Session = Depends(get_db)) -> StreamingResponse:
     conversation, provider, model, llm_messages, user_message_out = _prepare(db, req)
     p = provider_router.get_provider(provider)
-    registry = default_registry()
+    registry = _build_registry()
     conversation_id = conversation.id
 
     async def gen():

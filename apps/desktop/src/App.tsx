@@ -3,6 +3,7 @@ import { api } from './api/client'
 import AgentRunPanel from './components/AgentRunPanel'
 import Characters from './components/Characters'
 import Chat from './components/Chat'
+import Mcp from './components/Mcp'
 import Memory from './components/Memory'
 import Placeholder from './components/Placeholder'
 import Skills from './components/Skills'
@@ -11,7 +12,6 @@ import Sidebar from './components/Sidebar'
 import { useAppStore } from './store/useAppStore'
 
 const PLACEHOLDER_TITLES: Record<string, string> = {
-  mcp: 'MCP',
   channels: 'Channels',
 }
 
@@ -21,6 +21,7 @@ function MainView() {
   if (activeView === 'characters') return <Characters />
   if (activeView === 'memory') return <Memory />
   if (activeView === 'skills') return <Skills />
+  if (activeView === 'mcp') return <Mcp />
   if (activeView === 'settings') return <Settings />
   return <Placeholder title={PLACEHOLDER_TITLES[activeView]} />
 }
