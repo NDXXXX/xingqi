@@ -1,6 +1,6 @@
 """Agent 图 tool-calling 循环测试（用 fake provider，不碰网络/DB）。"""
 
-from app.agent.runtime import run_agent
+from app.agent.runtime import run_agent, run_agent_stream
 from app.providers.base import AIProvider, LLMResponse, ToolCall
 from app.tools.registry import default_registry
 
@@ -57,3 +57,32 @@ async def test_plain_answer_skips_tools():
     assert "execute_tool" not in steps
     assert steps.count("call_llm") == 1
     assert steps == ["load_context", "call_llm", "finalize"]
+
+
+class StreamingProvider(PlainProvider):
+    async def stream_chat(self, messages, tools=None, **kwargs):
+        yield "直接"
+        yield "回答"
+        yield LLMResponse(content="直接回答", tool_calls=[])
+
+
+async def test_streaming_agent_forwards_provider_chunks():
+    events = []
+    async for event in run_agent_stream(
+        StreamingProvider(), default_registry(), "test-model", "conv-1", [{"role": "user", "content": "你好"}]
+    ):
+        events.append(event)
+
+    assert [event["text"] for event in events if event["type"] == "chunk"] == ["直接", "回答"]
+    assert events[-1] == {"type": "final", "final_response": "直接回答"}
+
+
+async def test_streaming_agent_fallback_keeps_tool_loop():
+    events = []
+    async for event in run_agent_stream(
+        FakeProvider(), default_registry(), "test-model", "conv-1", [{"role": "user", "content": "计算 2+3"}]
+    ):
+        events.append(event)
+
+    assert any(event.get("name") == "execute_tool" for event in events)
+    assert events[-1]["final_response"] == "结果是 5"

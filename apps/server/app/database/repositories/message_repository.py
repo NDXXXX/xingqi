@@ -2,7 +2,7 @@
 
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from ..models import Message
@@ -29,3 +29,15 @@ class MessageRepository:
         db.commit()
         db.refresh(message)
         return message
+
+    def prepare_regeneration(self, db: Session, conversation_id: str) -> Message | None:
+        messages = self.list_by_conversation(db, conversation_id)
+        user_message = next((message for message in reversed(messages) if message.role == "user"), None)
+        if user_message is None:
+            return None
+        user_index = messages.index(user_message)
+        later_ids = [message.id for message in messages[user_index + 1 :]]
+        if later_ids:
+            db.execute(delete(Message).where(Message.id.in_(later_ids)))
+            db.commit()
+        return user_message

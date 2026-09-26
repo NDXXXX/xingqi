@@ -20,6 +20,9 @@ class ProviderRepository:
             select(Provider).options(selectinload(Provider.models)).where(Provider.id == provider_id)
         ).first()
 
+    def get_by_name(self, db: Session, name: str) -> Provider | None:
+        return db.scalars(select(Provider).where(Provider.name == name)).first()
+
     def create(
         self,
         db: Session,
@@ -47,3 +50,40 @@ class ProviderRepository:
         db.commit()
         db.refresh(provider)
         return provider
+
+    def update(self, db: Session, provider: Provider, **changes) -> Provider:
+        for key, value in changes.items():
+            setattr(provider, key, value)
+        db.commit()
+        db.refresh(provider)
+        return self.get(db, provider.id) or provider
+
+    def delete(self, db: Session, provider: Provider) -> None:
+        db.delete(provider)
+        db.commit()
+
+    def get_model(self, db: Session, provider_id: str, model_id: str) -> ModelConfig | None:
+        return db.scalars(
+            select(ModelConfig).where(
+                ModelConfig.id == model_id,
+                ModelConfig.provider_id == provider_id,
+            )
+        ).first()
+
+    def create_model(self, db: Session, provider: Provider, **values) -> ModelConfig:
+        model = ModelConfig(id=str(uuid4()), provider_id=provider.id, **values)
+        db.add(model)
+        db.commit()
+        db.refresh(model)
+        return model
+
+    def update_model(self, db: Session, model: ModelConfig, **changes) -> ModelConfig:
+        for key, value in changes.items():
+            setattr(model, key, value)
+        db.commit()
+        db.refresh(model)
+        return model
+
+    def delete_model(self, db: Session, model: ModelConfig) -> None:
+        db.delete(model)
+        db.commit()

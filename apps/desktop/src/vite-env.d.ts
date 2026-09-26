@@ -8,5 +8,6 @@ interface BackendHealth {
 interface Window {
   api: {
     getBackendHealth: () => Promise<BackendHealth>
+    getBackendToken: () => Promise<string>
   }
 }

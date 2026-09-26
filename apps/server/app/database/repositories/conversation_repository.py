@@ -9,8 +9,11 @@ from ..models import Conversation, utcnow
 
 
 class ConversationRepository:
-    def list(self, db: Session) -> list[Conversation]:
-        return list(db.scalars(select(Conversation).order_by(Conversation.updated_at.desc())))
+    def list(self, db: Session, query: str | None = None) -> list[Conversation]:
+        statement = select(Conversation)
+        if query:
+            statement = statement.where(Conversation.title.contains(query.strip()))
+        return list(db.scalars(statement.order_by(Conversation.updated_at.desc())))
 
     def get(self, db: Session, conversation_id: str) -> Conversation | None:
         return db.get(Conversation, conversation_id)
@@ -33,6 +36,7 @@ class ConversationRepository:
         character_id: str | None = None,
         external_user_id: str | None = None,
         model_id: str | None = None,
+        identity_id: str | None = None,
     ) -> Conversation:
         conversation = Conversation(
             id=str(uuid4()),
@@ -41,6 +45,7 @@ class ConversationRepository:
             character_id=character_id,
             external_user_id=external_user_id,
             model_id=model_id,
+            identity_id=identity_id,
         )
         db.add(conversation)
         db.commit()

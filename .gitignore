@@ -3,6 +3,9 @@ node_modules/
 dist/
 out/
 dist-electron/
+build/
+test-results/
+playwright-report/
 *.log
 
 # Python

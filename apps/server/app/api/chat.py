@@ -2,28 +2,26 @@
 
 import json
 import logging
+import asyncio
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from ..agent.runtime import run_agent
-from ..characters.prompts import build_system_prompt
+from ..agent.context import build_tool_registry, with_agent_context
+from ..agent.run_manager import active_runs
+from ..agent.runtime import run_agent, run_agent_stream
 from ..database.db import SessionLocal, get_db
-from ..database.models import Provider
-from ..database.repositories.character_repository import CharacterRepository
 from ..database.repositories.conversation_repository import ConversationRepository
 from ..database.repositories.message_repository import MessageRepository
-from ..database.repositories.memory_repository import MemoryRepository
-from ..database.repositories.provider_repository import ProviderRepository
+from ..database.repositories.identity_repository import IdentityRepository
+from ..database.repositories.agent_run_repository import AgentRunRepository
 from ..memory.manager import MemoryManager
-from ..memory.retriever import retrieve
-from ..mcp.manager import default_manager as mcp_manager
 from ..providers.router import provider_router
-from ..skills.registry import default_registry as skill_registry
-from ..tools.registry import ToolRegistry, default_registry
+from ..providers.selection import ProviderSelectionError, select_provider_model
 from .conversations import MessageOut
+from .errors import classify_provider_error
 
 logger = logging.getLogger(__name__)
 
@@ -31,110 +29,104 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 conversation_repo = ConversationRepository()
 message_repo = MessageRepository()
-provider_repo = ProviderRepository()
-character_repo = CharacterRepository()
-memory_repo = MemoryRepository()
 memory_manager = MemoryManager()
-
-# 最终答案在 SSE 里的分块大小（skeleton：agent loop 非流式，最终答案分块下发以保留打字机效果）。
-CHUNK_SIZE = 24
-
+identity_repo = IdentityRepository()
+run_repo = AgentRunRepository()
 
 class ChatRequest(BaseModel):
     conversation_id: str | None = None
     message: str
     provider_id: str | None = None
     model: str | None = None
-
-
-def _resolve_provider(db: Session, provider_id: str | None) -> Provider:
-    if provider_id:
-        provider = provider_repo.get(db, provider_id)
-        if provider is None:
-            raise HTTPException(status_code=404, detail="Provider not found")
-    else:
-        provider = next((p for p in provider_repo.list(db) if p.enabled and p.configured), None)
-    if provider is None:
-        raise HTTPException(status_code=400, detail="没有可用的 Provider，请先在 Settings 配置")
-    return provider
-
-
-def _resolve_model(provider: Provider, model: str | None) -> str:
-    if model:
-        return model
-    if provider.models:
-        return provider.models[0].model_name
-    raise HTTPException(status_code=400, detail="Provider 未配置模型")
+    regenerate: bool = False
 
 
 def _prepare(db: Session, req: ChatRequest):
-    provider = _resolve_provider(db, req.provider_id)
-    model = _resolve_model(provider, req.model)
-
     if req.conversation_id:
         conversation = conversation_repo.get(db, req.conversation_id)
         if conversation is None:
             raise HTTPException(status_code=404, detail="Conversation not found")
     else:
         title = req.message.strip()[:30] or "New Chat"
-        conversation = conversation_repo.create(db, title=title, channel="desktop")
+        conversation = conversation_repo.create(
+            db, title=title, channel="desktop", identity_id=identity_repo.local(db).id
+        )
+    if conversation.identity_id is None and conversation.channel == "desktop":
+        conversation.identity_id = identity_repo.local(db).id
+        db.commit()
 
-    user_message = message_repo.create(db, conversation_id=conversation.id, role="user", content=req.message)
+    try:
+        provider, model_config = select_provider_model(
+            db, conversation, req.provider_id, req.model
+        )
+    except ProviderSelectionError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    model = model_config.model_name
+
+    existing_messages = message_repo.list_by_conversation(db, conversation.id)
+    if not existing_messages and conversation.title == "New Chat":
+        conversation.title = req.message.strip()[:30] or "New Chat"
+        db.commit()
+        db.refresh(conversation)
+
+    if req.regenerate:
+        user_message = message_repo.prepare_regeneration(db, conversation.id)
+        if user_message is None:
+            raise HTTPException(status_code=400, detail="没有可以重新生成的用户消息")
+        req.message = user_message.content
+    else:
+        user_message = message_repo.create(
+            db, conversation_id=conversation.id, role="user", content=req.message
+        )
 
     history = message_repo.list_by_conversation(db, conversation.id)
     llm_messages = [{"role": m.role, "content": m.content} for m in history]
 
-    system_parts: list[str] = []
-    if conversation.character_id:
-        character = character_repo.get(db, conversation.character_id)
-        if character is not None:
-            system_parts.append(build_system_prompt(character))
-    relevant = retrieve(req.message, memory_repo.list(db))
-    if relevant:
-        system_parts.append("相关记忆：\n" + "\n".join(f"- {m.content}" for m in relevant))
-    matched = skill_registry.match(req.message)
-    if matched:
-        system_parts.append("可用技能：\n" + "\n\n".join(f"技能：{s.name}\n{s.content}" for s in matched))
-    if system_parts:
-        llm_messages.insert(0, {"role": "system", "content": "\n\n".join(system_parts)})
+    llm_messages = with_agent_context(
+        db,
+        conversation,
+        req.message,
+        llm_messages,
+        model_config.context_window,
+        model_config.max_output_tokens,
+    )
 
     user_message_out = MessageOut.model_validate(user_message).model_dump(mode="json")
 
     return conversation, provider, model, llm_messages, user_message_out
 
 
-def _build_registry() -> ToolRegistry:
-    registry = _build_registry()
-    for tool in mcp_manager.tools():
-        registry.register(tool)
-    return registry
-
-
-def _chunk(text: str):
-    return [text[i : i + CHUNK_SIZE] for i in range(0, len(text), CHUNK_SIZE)]
-
-
 @router.post("")
 async def chat(req: ChatRequest, db: Session = Depends(get_db)) -> dict:
     conversation, provider, model, llm_messages, user_message_out = _prepare(db, req)
     p = provider_router.get_provider(provider)
-    registry = _build_registry()
+    registry = build_tool_registry()
+    run = run_repo.create(db, conversation.id, provider.id, model)
 
     steps: list[dict] = []
     final_response = ""
-    async for event in run_agent(p, registry, model, conversation.id, llm_messages):
-        if event["type"] == "step":
-            steps.append(event)
-        elif event["type"] == "final":
-            final_response = event["final_response"]
+    try:
+        async for event in run_agent(p, registry, model, conversation.id, llm_messages):
+            if event["type"] in {"step", "tool"}:
+                steps.append(event)
+                run_repo.add_event(db, run.id, event)
+            elif event["type"] == "final":
+                final_response = event["final_response"]
+    except Exception as e:
+        run_repo.finish(db, run.id, "failed", str(e))
+        raise
 
     assistant = message_repo.create(db, conversation_id=conversation.id, role="assistant", content=final_response)
     conversation_repo.touch(db, conversation.id, model)
     try:
-        await memory_manager.extract_and_save(db, p, model, req.message, final_response)
+        await memory_manager.extract_and_save(
+            db, p, model, req.message, final_response, conversation.identity_id
+        )
     except Exception as e:
         logger.warning("memory extraction failed: %s", e)
+    run_repo.finish(db, run.id, "completed")
     return {
+        "run_id": run.id,
         "conversation_id": conversation.id,
         "user_message": user_message_out,
         "assistant_message": MessageOut.model_validate(assistant).model_dump(mode="json"),
@@ -143,39 +135,75 @@ async def chat(req: ChatRequest, db: Session = Depends(get_db)) -> dict:
 
 
 @router.post("/stream")
-async def chat_stream(req: ChatRequest, db: Session = Depends(get_db)) -> StreamingResponse:
+async def chat_stream(
+    req: ChatRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> StreamingResponse:
     conversation, provider, model, llm_messages, user_message_out = _prepare(db, req)
     p = provider_router.get_provider(provider)
-    registry = _build_registry()
+    registry = build_tool_registry()
     conversation_id = conversation.id
+    identity_id = conversation.identity_id
+    run = run_repo.create(db, conversation.id, provider.id, model)
+    run_id = run.id
 
     async def gen():
+        session = SessionLocal()
         steps: list[dict] = []
         final_response = ""
+        active_runs.register(run_id)
         try:
-            async for event in run_agent(p, registry, model, conversation_id, llm_messages):
-                if event["type"] == "step":
+            yield f"data: {json.dumps({'type': 'run', 'run_id': run_id}, ensure_ascii=False)}\n\n"
+            async for event in run_agent_stream(p, registry, model, conversation_id, llm_messages):
+                if event["type"] in {"step", "tool"}:
                     steps.append(event)
+                    run_repo.add_event(session, run_id, event)
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                elif event["type"] == "chunk":
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                 elif event["type"] == "final":
                     final_response = event["final_response"]
+        except asyncio.CancelledError:
+            run_repo.finish(session, run_id, "cancelled")
+            active_runs.unregister(run_id)
+            session.close()
+            raise
+        except GeneratorExit:
+            run_repo.finish(session, run_id, "cancelled")
+            active_runs.unregister(run_id)
+            session.close()
+            raise
         except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'detail': str(e)}, ensure_ascii=False)}\n\n"
+            run_repo.finish(session, run_id, "failed", str(e))
+            active_runs.unregister(run_id)
+            session.close()
+            code, message, retryable, _status = classify_provider_error(e)
+            error = {
+                "code": code,
+                "message": message,
+                "retryable": retryable,
+                "request_id": request.state.request_id,
+            }
+            yield f"data: {json.dumps({'type': 'error', 'detail': message, 'error': error}, ensure_ascii=False)}\n\n"
             return
-        for part in _chunk(final_response):
-            yield f"data: {json.dumps({'type': 'chunk', 'text': part}, ensure_ascii=False)}\n\n"
-        # 独立会话：流结束后 get_db 会话可能已随请求关闭。
-        session = SessionLocal()
         try:
             assistant = message_repo.create(session, conversation_id=conversation_id, role="assistant", content=final_response)
             conversation_repo.touch(session, conversation_id, model)
             try:
-                await memory_manager.extract_and_save(session, p, model, req.message, final_response)
+                await memory_manager.extract_and_save(
+                    session, p, model, req.message, final_response, identity_id
+                )
             except Exception as e:
                 logger.warning("memory extraction failed: %s", e)
             assistant_out = MessageOut.model_validate(assistant).model_dump(mode="json")
+            run_repo.finish(session, run_id, "completed")
+            yield f"data: {json.dumps({'type': 'done', 'run_id': run_id, 'conversation_id': conversation_id, 'user_message': user_message_out, 'assistant_message': assistant_out, 'steps': steps}, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            run_repo.finish(session, run_id, "failed", str(e))
+            raise
         finally:
+            active_runs.unregister(run_id)
             session.close()
-        yield f"data: {json.dumps({'type': 'done', 'conversation_id': conversation_id, 'user_message': user_message_out, 'assistant_message': assistant_out, 'steps': steps}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(gen(), media_type="text/event-stream")

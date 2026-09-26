@@ -37,9 +37,9 @@ export default function ChannelsPage() {
           }}
         >
           <h3 className="text-sm font-medium text-neutral-200">连接 QQ（OneBot v11 反向 WebSocket）</h3>
-          <input value={wsUrl} onChange={(e) => setWsUrl(e.target.value)} placeholder="ws://127.0.0.1:3001" className={inputClass} />
-          <input value={accessToken} onChange={(e) => setAccessToken(e.target.value)} placeholder="Access Token（可选）" className={inputClass} />
-          {error && <p className="text-sm text-red-300">{error}</p>}
+          <label className="block text-xs text-neutral-400">WebSocket 地址<input value={wsUrl} onChange={(e) => setWsUrl(e.target.value)} placeholder="ws://127.0.0.1:3001" className={`mt-1 ${inputClass}`} /></label>
+          <label className="block text-xs text-neutral-400">Access Token（可选）<input value={accessToken} onChange={(e) => setAccessToken(e.target.value)} type="password" autoComplete="off" className={`mt-1 ${inputClass}`} /></label>
+          {error && <p role="alert" className="text-sm text-red-300">{error}</p>}
           <div className="flex justify-end">
             <button type="submit" disabled={!wsUrl.trim()} className="rounded-lg bg-neutral-100 px-3 py-1.5 text-sm font-medium text-neutral-900 hover:bg-white disabled:opacity-50">
               连接
@@ -53,10 +53,12 @@ export default function ChannelsPage() {
           channels.map((c) => (
             <div key={c.channel} className="flex items-center justify-between rounded-lg border border-neutral-800 bg-neutral-900 p-3">
               <div className="flex items-center gap-2 text-sm font-medium text-neutral-100">
-                <span className={`h-2 w-2 rounded-full ${c.connected ? 'bg-emerald-400' : 'bg-neutral-600'}`} />
-                {c.channel === 'qq' ? 'QQ' : c.channel}
+                <span className={`h-2 w-2 rounded-full ${c.connected ? 'bg-emerald-400' : c.status === 'connecting' || c.status === 'reconnecting' ? 'bg-amber-400' : 'bg-neutral-600'}`} />
+                <span>{c.channel === 'qq' ? 'QQ' : c.channel}</span>
+                <span className="text-xs font-normal text-neutral-500">{c.status}{c.retry_count ? ` · 重试 ${c.retry_count}` : ''}</span>
               </div>
-              {c.connected && (
+              {c.last_error && <span className="max-w-64 truncate text-xs text-red-300" title={c.last_error}>{c.last_error}</span>}
+              {c.status !== 'disconnected' && (
                 <button onClick={() => disconnectChannel(c.channel)} className="rounded-lg border border-neutral-700 px-2 py-1 text-sm text-neutral-300 hover:bg-red-900/40">
                   断开
                 </button>

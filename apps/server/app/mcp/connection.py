@@ -11,6 +11,8 @@ from ..tools.base import AgentTool
 class McpTool(AgentTool):
     """包装一个 MCP 工具为 AgentTool，execute 时回调 call(arguments)。"""
 
+    timeout_seconds = 30
+
     def __init__(self, name: str, description: str, schema: dict, call):
         self.name = name
         self.description = description
@@ -46,7 +48,14 @@ class McpConnection:
             schema = t.input_schema if isinstance(t.input_schema, dict) else {}
             if not schema:
                 schema = {"type": "object", "properties": {}}
-            self.tools.append(McpTool(t.name, t.description or "", schema, self._make_call(t.name)))
+            self.tools.append(
+                McpTool(
+                    f"{self.name}.{t.name}",
+                    t.description or "",
+                    schema,
+                    self._make_call(t.name),
+                )
+            )
         return self.tools
 
     def _make_call(self, name: str):

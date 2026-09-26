@@ -10,6 +10,7 @@ class AgentTool(ABC):
     name: str = ""
     description: str = ""
     schema: dict[str, Any] = {}
+    timeout_seconds: int = 15
 
     @abstractmethod
     async def execute(self, **kwargs) -> Any:

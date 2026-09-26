@@ -18,9 +18,10 @@ type FormState = {
   type: string
   content: string
   importance: string
+  shared: boolean
 }
 
-const EMPTY: FormState = { type: 'fact', content: '', importance: '0.5' }
+const EMPTY: FormState = { type: 'fact', content: '', importance: '0.5', shared: false }
 
 const inputClass =
   'w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-neutral-500'
@@ -35,7 +36,7 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 }
 
 function toForm(m: Memory): FormState {
-  return { type: m.type, content: m.content, importance: String(m.importance) }
+  return { type: m.type, content: m.content, importance: String(m.importance), shared: m.shared }
 }
 
 export default function MemoryPage() {
@@ -70,6 +71,7 @@ export default function MemoryPage() {
       type: form.type,
       content: form.content,
       importance: Number(form.importance) || 0.5,
+      shared: form.shared,
     }
     if (editingId) await updateMemory(editingId, payload)
     else await createMemory(payload)
@@ -119,6 +121,10 @@ export default function MemoryPage() {
             <Field label="重要性（0-1）">
               <input value={form.importance} onChange={set('importance')} type="number" min="0" max="1" step="0.1" className={inputClass} />
             </Field>
+            <label className="flex items-center gap-2 text-sm text-neutral-300">
+              <input type="checkbox" checked={form.shared} onChange={(e) => setForm((current) => ({ ...current, shared: e.target.checked }))} />
+              在不同身份之间共享这条记忆
+            </label>
             <div className="flex justify-end gap-2">
               <button
                 type="button"
@@ -147,6 +153,7 @@ export default function MemoryPage() {
                 <div className="flex items-center gap-2">
                   <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-400">{TYPE_LABELS[m.type] ?? m.type}</span>
                   <span className="text-xs text-neutral-600">重要度 {m.importance.toFixed(1)}</span>
+                  {m.shared && <span className="text-xs text-blue-400">共享</span>}
                 </div>
                 <div className="mt-1 text-sm text-neutral-100">{m.content}</div>
               </div>

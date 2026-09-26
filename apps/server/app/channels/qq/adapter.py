@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import random
+from collections.abc import Callable
 
 import websockets
 
@@ -11,28 +13,52 @@ from ..base import ChannelAdapter, IncomingMessage
 class QQAdapter(ChannelAdapter):
     name = "qq"
 
-    def __init__(self, router, ws_url: str, access_token: str | None = None):
+    def __init__(
+        self,
+        router,
+        ws_url: str,
+        access_token: str | None = None,
+        on_status: Callable[[str, str | None, int], None] | None = None,
+    ):
         self.router = router
         self.ws_url = ws_url
         self.access_token = access_token
+        self.on_status = on_status
         self._ws = None
         self._running = False
 
+    def _status(self, status: str, error: str | None = None, retries: int = 0) -> None:
+        if self.on_status:
+            self.on_status(status, error, retries)
+
     async def start(self) -> None:
         self._running = True
+        retries = 0
+        delays = (1, 2, 5, 10, 30)
         while self._running:
             try:
+                self._status("connecting" if retries == 0 else "reconnecting", None, retries)
                 headers = {}
                 if self.access_token:
                     headers["Authorization"] = f"Bearer {self.access_token}"
                 async with websockets.connect(self.ws_url, additional_headers=headers) as ws:
                     self._ws = ws
+                    retries = 0
+                    self._status("connected")
                     async for raw in ws:
                         await self._handle_raw(raw)
-            except Exception:
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
                 if not self._running:
                     break
-                await asyncio.sleep(5)
+                retries += 1
+                self._status("reconnecting", str(exc), retries)
+                base_delay = delays[min(retries - 1, len(delays) - 1)]
+                await asyncio.sleep(base_delay + random.uniform(0, min(1.0, base_delay * 0.2)))
+            finally:
+                self._ws = None
+        self._status("disconnected", None, retries)
 
     async def stop(self) -> None:
         self._running = False

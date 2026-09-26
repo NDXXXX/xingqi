@@ -1,12 +1,13 @@
 import { create } from 'zustand'
 import { api } from '../api/client'
-import type { AgentStep, Channel, Character, CharacterPayload, Conversation, McpServer, Memory, MemoryPayload, Message, Provider, Skill, View } from '../types'
+import type { AgentStep, Channel, Character, CharacterPayload, Conversation, DefaultModel, McpServer, Memory, MemoryPayload, Message, ModelConfigPayload, ModelConfigUpdatePayload, Provider, ProviderPayload, ProviderUpdatePayload, Skill, View } from '../types'
 
 interface AppState {
   activeView: View
   activeConversationId: string | null
   conversations: Conversation[]
   providers: Provider[]
+  defaultModel: DefaultModel
   characters: Character[]
   memories: Memory[]
   skills: Skill[]
@@ -16,6 +17,7 @@ interface AppState {
   streaming: boolean
   streamText: string
   agentSteps: AgentStep[]
+  activeRunId: string | null
   error: string | null
 
   init: () => Promise<void>
@@ -23,8 +25,18 @@ interface AppState {
   setActiveView: (view: View) => void
   selectConversation: (id: string) => Promise<void>
   newConversation: () => Promise<void>
-  sendMessage: (text: string, providerId: string | null, model: string | null) => Promise<void>
+  deleteConversation: (id: string) => Promise<void>
+  renameConversation: (id: string, title: string) => Promise<void>
+  sendMessage: (text: string, providerId: string | null, model: string | null, regenerate?: boolean) => Promise<void>
+  stopGeneration: () => void
   clearError: () => void
+  createProvider: (payload: ProviderPayload) => Promise<void>
+  updateProvider: (id: string, payload: ProviderUpdatePayload) => Promise<void>
+  deleteProvider: (id: string) => Promise<void>
+  createModel: (providerId: string, payload: ModelConfigPayload) => Promise<void>
+  updateModel: (providerId: string, modelId: string, payload: ModelConfigUpdatePayload) => Promise<void>
+  deleteModel: (providerId: string, modelId: string) => Promise<void>
+  setDefaultModel: (value: DefaultModel) => Promise<void>
   createCharacter: (payload: CharacterPayload) => Promise<void>
   updateCharacter: (id: string, payload: CharacterPayload) => Promise<void>
   deleteCharacter: (id: string) => Promise<void>
@@ -39,11 +51,14 @@ interface AppState {
   disconnectChannel: (channel: string) => Promise<void>
 }
 
+let activeChatController: AbortController | null = null
+
 export const useAppStore = create<AppState>((set, get) => ({
   activeView: 'chat',
   activeConversationId: null,
   conversations: [],
   providers: [],
+  defaultModel: { provider_id: null, model_id: null },
   characters: [],
   memories: [],
   skills: [],
@@ -53,24 +68,35 @@ export const useAppStore = create<AppState>((set, get) => ({
   streaming: false,
   streamText: '',
   agentSteps: [],
+  activeRunId: null,
   error: null,
 
   init: async () => {
-    const [conversations, providers, characters, memories, skills, mcpServers, channels] = await Promise.all([
+    const [conversations, providers, defaultModel, characters, memories, skills, mcpServers, channels] = await Promise.all([
       api.listConversations(),
       api.listProviders(),
+      api.getDefaultModel(),
       api.listCharacters(),
       api.listMemories(),
       api.listSkills(),
       api.listMcp(),
       api.listChannels(),
     ])
-    set({ conversations, providers, characters, memories, skills, mcpServers, channels })
+    set({ conversations, providers, defaultModel, characters, memories, skills, mcpServers, channels })
   },
 
   reloadConversations: async () => {
     const conversations = await api.listConversations()
-    set({ conversations })
+    const activeId = get().activeConversationId
+    if (activeId && conversations.some((conversation) => conversation.id === activeId)) {
+      const messages = await api.listMessages(activeId)
+      set((s) => ({
+        conversations,
+        messagesByConversation: { ...s.messagesByConversation, [activeId]: messages },
+      }))
+      return
+    }
+    set({ conversations, activeConversationId: activeId ? null : activeId })
   },
 
   setActiveView: (activeView) => set({ activeView }),
@@ -93,7 +119,25 @@ export const useAppStore = create<AppState>((set, get) => ({
     }))
   },
 
-  sendMessage: async (text, providerId, model) => {
+  deleteConversation: async (id) => {
+    await api.deleteConversation(id)
+    set((s) => {
+      const messagesByConversation = { ...s.messagesByConversation }
+      delete messagesByConversation[id]
+      return {
+        conversations: s.conversations.filter((conversation) => conversation.id !== id),
+        activeConversationId: s.activeConversationId === id ? null : s.activeConversationId,
+        messagesByConversation,
+      }
+    })
+  },
+
+  renameConversation: async (id, title) => {
+    const conversation = await api.renameConversation(id, title)
+    set((s) => ({ conversations: s.conversations.map((item) => (item.id === id ? conversation : item)) }))
+  },
+
+  sendMessage: async (text, providerId, model, regenerate = false) => {
     const content = text.trim()
     if (!content || get().streaming) return
     let conversationId = get().activeConversationId
@@ -108,7 +152,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }))
     }
 
-    const tempUser: Message = {
+    const tempUser: Message | null = regenerate ? null : {
       id: `tmp-${Date.now()}`,
       conversation_id: conversationId,
       role: 'user',
@@ -118,39 +162,129 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({
       messagesByConversation: {
         ...s.messagesByConversation,
-        [conversationId]: [...(s.messagesByConversation[conversationId] ?? []), tempUser],
+        [conversationId]: tempUser
+          ? [...(s.messagesByConversation[conversationId] ?? []), tempUser]
+          : s.messagesByConversation[conversationId] ?? [],
       },
       streaming: true,
       streamText: '',
       agentSteps: [],
+      activeRunId: null,
       error: null,
     }))
 
+    const controller = new AbortController()
+    activeChatController = controller
     try {
       const result = await api.chatStream(
-        { conversation_id: conversationId, message: content, provider_id: providerId, model },
+        { conversation_id: conversationId, message: content, provider_id: providerId, model, regenerate },
         (chunk) => set((s) => ({ streamText: s.streamText + chunk })),
-        (step) => set((s) => ({ agentSteps: [...s.agentSteps, { name: step.name, status: step.status as AgentStep['status'] }] })),
+        (step) => set((s) => ({
+          agentSteps: [...s.agentSteps, {
+            type: step.type,
+            name: step.name,
+            status: step.status as AgentStep['status'],
+            input: step.input,
+            output: step.output,
+            error: step.error,
+          }],
+        })),
+        controller.signal,
+        (runId) => set({ activeRunId: runId }),
       )
       set((s) => ({
         messagesByConversation: {
           ...s.messagesByConversation,
           [conversationId]: [
-            ...(s.messagesByConversation[conversationId] ?? []).filter((m) => m.id !== tempUser.id),
+            ...(s.messagesByConversation[conversationId] ?? []).filter(
+              (m) => m.id !== tempUser?.id && m.id !== result.user_message.id && m.id !== result.assistant_message.id,
+            ),
             result.user_message,
             result.assistant_message,
           ],
         },
         streaming: false,
         streamText: '',
+        activeRunId: null,
       }))
       await get().reloadConversations()
     } catch (e) {
-      set({ streaming: false, streamText: '', error: e instanceof Error ? e.message : String(e) })
+      const aborted = e instanceof DOMException && e.name === 'AbortError'
+      set({
+        streaming: false,
+        streamText: '',
+        error: aborted ? null : e instanceof Error ? e.message : String(e),
+        activeRunId: null,
+      })
+      try {
+        const messages = await api.listMessages(conversationId)
+        set((s) => ({ messagesByConversation: { ...s.messagesByConversation, [conversationId]: messages } }))
+      } catch {
+        // 保留原始错误；BackendStatus 会单独展示服务状态。
+      }
+    } finally {
+      if (activeChatController === controller) activeChatController = null
     }
   },
 
+  stopGeneration: () => {
+    const runId = get().activeRunId
+    if (runId) void api.cancelRun(runId).catch(() => undefined)
+    activeChatController?.abort()
+  },
+
   clearError: () => set({ error: null }),
+
+  createProvider: async (payload) => {
+    const provider = await api.createProvider(payload)
+    set((s) => ({ providers: [...s.providers, provider].sort((a, b) => a.name.localeCompare(b.name)) }))
+  },
+
+  updateProvider: async (id, payload) => {
+    const provider = await api.updateProvider(id, payload)
+    set((s) => ({ providers: s.providers.map((item) => (item.id === id ? provider : item)) }))
+  },
+
+  deleteProvider: async (id) => {
+    await api.deleteProvider(id)
+    set((s) => ({ providers: s.providers.filter((item) => item.id !== id) }))
+  },
+
+  createModel: async (providerId, payload) => {
+    const model = await api.createModel(providerId, payload)
+    set((s) => ({
+      providers: s.providers.map((provider) =>
+        provider.id === providerId ? { ...provider, models: [...provider.models, model] } : provider,
+      ),
+    }))
+  },
+
+  updateModel: async (providerId, modelId, payload) => {
+    const model = await api.updateModel(providerId, modelId, payload)
+    set((s) => ({
+      providers: s.providers.map((provider) =>
+        provider.id === providerId
+          ? { ...provider, models: provider.models.map((item) => (item.id === modelId ? model : item)) }
+          : provider,
+      ),
+    }))
+  },
+
+  deleteModel: async (providerId, modelId) => {
+    await api.deleteModel(providerId, modelId)
+    set((s) => ({
+      providers: s.providers.map((provider) =>
+        provider.id === providerId
+          ? { ...provider, models: provider.models.filter((item) => item.id !== modelId) }
+          : provider,
+      ),
+    }))
+  },
+
+  setDefaultModel: async (value) => {
+    const defaultModel = await api.setDefaultModel(value)
+    set({ defaultModel })
+  },
 
   createCharacter: async (payload) => {
     const character = await api.createCharacter(payload)

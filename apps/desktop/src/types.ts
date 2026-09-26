@@ -33,6 +33,8 @@ export interface ModelConfig {
   supports_tools: boolean
   supports_streaming: boolean
   enabled: boolean
+  context_window: number | null
+  max_output_tokens: number | null
 }
 
 export interface Provider {
@@ -45,9 +47,50 @@ export interface Provider {
   models: ModelConfig[]
 }
 
+export type ProviderPayload = {
+  name: string
+  provider_type: string
+  api_key: string
+  base_url?: string | null
+}
+
+export type ProviderUpdatePayload = {
+  name?: string
+  api_key?: string | null
+  base_url?: string | null
+  enabled?: boolean
+}
+
+export type ModelConfigPayload = {
+  model_name: string
+  display_name: string
+  supports_tools?: boolean
+  supports_streaming?: boolean
+  enabled?: boolean
+  context_window?: number | null
+  max_output_tokens?: number | null
+}
+
+export type ModelConfigUpdatePayload = Partial<ModelConfigPayload>
+
+export interface DefaultModel {
+  provider_id: string | null
+  model_id: string | null
+}
+
+export interface ProviderTestResult {
+  ok: boolean
+  detail: string
+  reply?: string
+}
+
 export interface AgentStep {
   name: string
-  status: 'done' | 'running'
+  status: 'completed' | 'running' | 'failed'
+  type?: 'step' | 'tool'
+  input?: unknown
+  output?: unknown
+  error?: string | null
 }
 
 export interface Character {
@@ -78,6 +121,8 @@ export type CharacterPayload = {
 export interface Memory {
   id: string
   user_id: string | null
+  identity_id: string | null
+  shared: boolean
   type: string
   content: string
   importance: number
@@ -89,6 +134,7 @@ export type MemoryPayload = {
   type: string
   content: string
   importance?: number
+  shared?: boolean
 }
 
 export interface Skill {
@@ -109,4 +155,36 @@ export interface McpServer {
 export interface Channel {
   channel: string
   connected: boolean
+  status: 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'error'
+  last_connected_at: string | null
+  last_disconnected_at: string | null
+  last_error: string | null
+  retry_count: number
+}
+
+export interface AgentRunStepRecord {
+  id: string
+  step_type: 'step' | 'tool'
+  name: string
+  status: 'running' | 'completed' | 'failed' | 'cancelled'
+  input_json: string | null
+  output_json: string | null
+  started_at: string
+  finished_at: string | null
+  error: string | null
+}
+
+export interface AgentRun {
+  id: string
+  conversation_id: string
+  provider_id: string
+  model_id: string
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+  started_at: string
+  finished_at: string | null
+  duration_ms: number | null
+  prompt_tokens: number | null
+  completion_tokens: number | null
+  error: string | null
+  steps: AgentRunStepRecord[]
 }

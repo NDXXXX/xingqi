@@ -1,0 +1,78 @@
+"""Agent Run 与步骤记录仓储。"""
+
+import json
+from uuid import uuid4
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session, selectinload
+
+from ..models import AgentRun, AgentRunStep, utcnow
+
+
+class AgentRunRepository:
+    def create(
+        self, db: Session, conversation_id: str, provider_id: str, model_id: str
+    ) -> AgentRun:
+        run = AgentRun(
+            id=str(uuid4()),
+            conversation_id=conversation_id,
+            provider_id=provider_id,
+            model_id=model_id,
+            status="running",
+        )
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+        return run
+
+    def get(self, db: Session, run_id: str) -> AgentRun | None:
+        return db.scalars(
+            select(AgentRun).options(selectinload(AgentRun.steps)).where(AgentRun.id == run_id)
+        ).first()
+
+    def list_for_conversation(self, db: Session, conversation_id: str) -> list[AgentRun]:
+        return list(
+            db.scalars(
+                select(AgentRun)
+                .options(selectinload(AgentRun.steps))
+                .where(AgentRun.conversation_id == conversation_id)
+                .order_by(AgentRun.started_at.desc())
+            )
+        )
+
+    def add_event(self, db: Session, run_id: str, event: dict) -> AgentRunStep | None:
+        event_type = event.get("type")
+        if event_type not in {"step", "tool"}:
+            return None
+        step = AgentRunStep(
+            id=str(uuid4()),
+            run_id=run_id,
+            step_type=event_type,
+            name=event.get("name", event_type),
+            status=event.get("status", "completed"),
+            input_json=self._json(event.get("input")),
+            output_json=self._json(event.get("output")),
+            finished_at=utcnow(),
+            error=event.get("error"),
+        )
+        db.add(step)
+        db.commit()
+        db.refresh(step)
+        return step
+
+    def finish(self, db: Session, run_id: str, status: str, error: str | None = None) -> None:
+        run = db.get(AgentRun, run_id)
+        if run is None:
+            return
+        finished_at = utcnow()
+        run.status = status
+        run.finished_at = finished_at
+        run.duration_ms = int((finished_at - run.started_at).total_seconds() * 1000)
+        run.error = error
+        db.commit()
+
+    @staticmethod
+    def _json(value) -> str | None:
+        if value is None:
+            return None
+        return json.dumps(value, ensure_ascii=False, default=str)

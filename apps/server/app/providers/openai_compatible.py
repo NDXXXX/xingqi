@@ -52,7 +52,9 @@ class OpenAICompatibleProvider(AIProvider):
 
     async def _stream(
         self, headers: dict[str, str], payload: dict[str, Any]
-    ) -> AsyncGenerator[str, None]:
+    ) -> AsyncGenerator[str | LLMResponse, None]:
+        content_parts: list[str] = []
+        pending_calls: dict[int, dict[str, str]] = {}
         async with httpx.AsyncClient(timeout=60.0, trust_env=False) as client:
             async with client.stream(
                 "POST", f"{self.base_url}/chat/completions", headers=headers, json=payload
@@ -64,6 +66,27 @@ class OpenAICompatibleProvider(AIProvider):
                     data = line[5:].strip()
                     if data == "[DONE]":
                         break
-                    delta = json.loads(data)["choices"][0].get("delta", {}).get("content", "")
-                    if delta:
-                        yield delta
+                    delta = json.loads(data)["choices"][0].get("delta", {})
+                    text = delta.get("content") or ""
+                    if text:
+                        content_parts.append(text)
+                        yield text
+                    for raw in delta.get("tool_calls") or []:
+                        index = raw.get("index", 0)
+                        call = pending_calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
+                        if raw.get("id"):
+                            call["id"] = raw["id"]
+                        fn = raw.get("function") or {}
+                        if fn.get("name"):
+                            call["name"] += fn["name"]
+                        if fn.get("arguments"):
+                            call["arguments"] += fn["arguments"]
+
+        tool_calls: list[ToolCall] = []
+        for call in pending_calls.values():
+            try:
+                arguments = json.loads(call["arguments"] or "{}")
+            except json.JSONDecodeError:
+                arguments = {}
+            tool_calls.append(ToolCall(id=call["id"], name=call["name"], arguments=arguments))
+        yield LLMResponse(content="".join(content_parts), tool_calls=tool_calls)

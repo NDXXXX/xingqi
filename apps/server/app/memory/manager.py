@@ -19,18 +19,21 @@ class MemoryManager:
         model: str,
         user_msg: str,
         assistant_msg: str,
+        identity_id: str | None = None,
     ) -> list[Memory]:
         candidates = await extract_candidates(
             provider,
             model,
             [{"role": "user", "content": user_msg}, {"role": "assistant", "content": assistant_msg}],
         )
-        existing = self.repo.list(db)
+        existing = self.repo.list(db, identity_id)
         saved: list[Memory] = []
         for c in candidates:
             if self._is_duplicate(c["content"], existing):
                 continue
-            memory = self.repo.create(db, type=c["type"], content=c["content"])
+            memory = self.repo.create(
+                db, type=c["type"], content=c["content"], identity_id=identity_id
+            )
             existing.append(memory)
             saved.append(memory)
         return saved

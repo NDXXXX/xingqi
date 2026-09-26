@@ -4,6 +4,7 @@
 """
 
 import keyring
+from keyring.errors import PasswordDeleteError
 
 SERVICE = "desktop-ai-companion"
 
@@ -14,6 +15,12 @@ class KeyStore:
 
     def get(self, ref: str) -> str | None:
         return keyring.get_password(SERVICE, ref)
+
+    def delete(self, ref: str) -> None:
+        try:
+            keyring.delete_password(SERVICE, ref)
+        except PasswordDeleteError:
+            pass
 
 
 keystore = KeyStore()

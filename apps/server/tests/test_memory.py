@@ -1,6 +1,8 @@
 """Memory 检索与提取测试。"""
 
 from app.database.models import Memory
+from app.database.repositories.identity_repository import IdentityRepository
+from app.database.repositories.memory_repository import MemoryRepository
 from app.memory.extractor import parse_candidates
 from app.memory.manager import MemoryManager
 from app.memory.retriever import retrieve
@@ -51,3 +53,27 @@ def test_is_duplicate():
     assert MemoryManager._is_duplicate("用户喜欢咖啡", existing) is True
     assert MemoryManager._is_duplicate("喜欢咖啡", existing) is True
     assert MemoryManager._is_duplicate("用户喜欢茶", existing) is False
+
+
+def test_memories_are_isolated_by_identity():
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from app.database import models  # noqa: F401
+    from app.database.db import Base
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+    identities = IdentityRepository()
+    repo = MemoryRepository()
+    local = identities.local(db)
+    qq = identities.get_or_create(db, "qq", "10001")
+    repo.create(db, type="fact", content="桌面秘密", identity_id=local.id)
+    repo.create(db, type="fact", content="QQ 秘密", identity_id=qq.id)
+    repo.create(db, type="fact", content="共享信息", identity_id=local.id, shared=True)
+
+    assert {memory.content for memory in repo.list(db, local.id)} == {"桌面秘密", "共享信息"}
+    assert {memory.content for memory in repo.list(db, qq.id)} == {"QQ 秘密", "共享信息"}
+    db.close()

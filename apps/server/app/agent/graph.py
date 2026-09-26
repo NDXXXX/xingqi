@@ -23,7 +23,7 @@ def build_agent_graph(
     tools = registry.to_openai_tools()
 
     def load_context(state: AgentState) -> dict:
-        # Character / Memory / Skills 注入在后续 Phase 落地，此处仅标记步骤。
+        # 上下文由入口统一注入；保留节点用于运行轨迹展示。
         return {}
 
     async def call_llm(state: AgentState) -> dict:

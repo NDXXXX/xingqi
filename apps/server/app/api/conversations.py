@@ -3,18 +3,20 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from ..database.db import get_db
 from ..database.models import Conversation, Message
 from ..database.repositories.conversation_repository import ConversationRepository
+from ..database.repositories.identity_repository import IdentityRepository
 from ..database.repositories.message_repository import MessageRepository
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
 conversation_repo = ConversationRepository()
 message_repo = MessageRepository()
+identity_repo = IdentityRepository()
 
 
 class MessageOut(BaseModel):
@@ -37,6 +39,8 @@ class ConversationCreate(BaseModel):
 
 class ConversationUpdate(BaseModel):
     character_id: str | None = None
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    model_id: str | None = None
 
 
 class ConversationOut(BaseModel):
@@ -46,6 +50,7 @@ class ConversationOut(BaseModel):
     channel: str
     external_user_id: str | None
     model_id: str | None
+    identity_id: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -53,12 +58,13 @@ class ConversationOut(BaseModel):
 
 
 @router.get("", response_model=list[ConversationOut])
-def list_conversations(db: Session = Depends(get_db)) -> list[Conversation]:
-    return conversation_repo.list(db)
+def list_conversations(q: str | None = None, db: Session = Depends(get_db)) -> list[Conversation]:
+    return conversation_repo.list(db, q)
 
 
 @router.post("", response_model=ConversationOut, status_code=201)
 def create_conversation(payload: ConversationCreate, db: Session = Depends(get_db)) -> Conversation:
+    identity_id = identity_repo.local(db).id if payload.channel == "desktop" else None
     return conversation_repo.create(
         db,
         title=payload.title,
@@ -66,6 +72,7 @@ def create_conversation(payload: ConversationCreate, db: Session = Depends(get_d
         character_id=payload.character_id,
         external_user_id=payload.external_user_id,
         model_id=payload.model_id,
+        identity_id=identity_id,
     )
 
 
@@ -87,6 +94,10 @@ def update_conversation(
     updates = payload.model_dump(exclude_unset=True)
     if "character_id" in updates:
         conversation.character_id = updates["character_id"]
+    if "title" in updates:
+        conversation.title = updates["title"].strip()
+    if "model_id" in updates:
+        conversation.model_id = updates["model_id"]
     db.commit()
     db.refresh(conversation)
     return conversation

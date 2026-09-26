@@ -2,15 +2,27 @@
 
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from ..models import Memory, utcnow
 
 
 class MemoryRepository:
-    def list(self, db: Session) -> list[Memory]:
-        return list(db.scalars(select(Memory).order_by(Memory.created_at.desc())))
+    def list(
+        self,
+        db: Session,
+        identity_id: str | None = None,
+        *,
+        include_shared: bool = True,
+    ) -> list[Memory]:
+        query = select(Memory)
+        if identity_id is not None:
+            condition = Memory.identity_id == identity_id
+            if include_shared:
+                condition = or_(condition, Memory.shared.is_(True))
+            query = query.where(condition)
+        return list(db.scalars(query.order_by(Memory.created_at.desc())))
 
     def get(self, db: Session, memory_id: str) -> Memory | None:
         return db.get(Memory, memory_id)
@@ -22,11 +34,15 @@ class MemoryRepository:
         type: str,
         content: str,
         user_id: str | None = None,
+        identity_id: str | None = None,
+        shared: bool = False,
         importance: float = 0.5,
     ) -> Memory:
         memory = Memory(
             id=str(uuid4()),
             user_id=user_id,
+            identity_id=identity_id,
+            shared=shared,
             type=type,
             content=content,
             importance=importance,
