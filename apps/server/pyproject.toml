@@ -12,6 +12,7 @@ dependencies = [
     "keyring>=25",
     "langgraph>=0.2",
     "mcp>=1.0",
+    "websockets>=12",
 ]
 
 [dependency-groups]

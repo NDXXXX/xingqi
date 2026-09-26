@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { api } from '../api/client'
-import type { AgentStep, Character, CharacterPayload, Conversation, McpServer, Memory, MemoryPayload, Message, Provider, Skill, View } from '../types'
+import type { AgentStep, Channel, Character, CharacterPayload, Conversation, McpServer, Memory, MemoryPayload, Message, Provider, Skill, View } from '../types'
 
 interface AppState {
   activeView: View
@@ -11,6 +11,7 @@ interface AppState {
   memories: Memory[]
   skills: Skill[]
   mcpServers: McpServer[]
+  channels: Channel[]
   messagesByConversation: Record<string, Message[]>
   streaming: boolean
   streamText: string
@@ -34,6 +35,8 @@ interface AppState {
   reloadSkills: () => Promise<void>
   connectMcp: (name: string, command: string, args: string[]) => Promise<void>
   disconnectMcp: (name: string) => Promise<void>
+  connectChannel: (channel: string, wsUrl: string, accessToken?: string | null) => Promise<void>
+  disconnectChannel: (channel: string) => Promise<void>
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -45,6 +48,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   memories: [],
   skills: [],
   mcpServers: [],
+  channels: [],
   messagesByConversation: {},
   streaming: false,
   streamText: '',
@@ -52,15 +56,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   error: null,
 
   init: async () => {
-    const [conversations, providers, characters, memories, skills, mcpServers] = await Promise.all([
+    const [conversations, providers, characters, memories, skills, mcpServers, channels] = await Promise.all([
       api.listConversations(),
       api.listProviders(),
       api.listCharacters(),
       api.listMemories(),
       api.listSkills(),
       api.listMcp(),
+      api.listChannels(),
     ])
-    set({ conversations, providers, characters, memories, skills, mcpServers })
+    set({ conversations, providers, characters, memories, skills, mcpServers, channels })
   },
 
   reloadConversations: async () => {
@@ -197,5 +202,15 @@ export const useAppStore = create<AppState>((set, get) => ({
   disconnectMcp: async (name) => {
     const mcpServers = await api.disconnectMcp(name)
     set({ mcpServers })
+  },
+
+  connectChannel: async (channel, wsUrl, accessToken) => {
+    const channels = await api.connectChannel(channel, { ws_url: wsUrl, access_token: accessToken ?? null })
+    set({ channels })
+  },
+
+  disconnectChannel: async (channel) => {
+    const channels = await api.disconnectChannel(channel)
+    set({ channels })
   },
 }))

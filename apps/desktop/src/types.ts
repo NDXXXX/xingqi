@@ -105,3 +105,8 @@ export interface McpServer {
   connected: boolean
   tools: string[]
 }
+
+export interface Channel {
+  channel: string
+  connected: boolean
+}

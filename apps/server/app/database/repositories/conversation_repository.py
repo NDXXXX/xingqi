@@ -15,6 +15,15 @@ class ConversationRepository:
     def get(self, db: Session, conversation_id: str) -> Conversation | None:
         return db.get(Conversation, conversation_id)
 
+    def get_by_external(
+        self, db: Session, channel: str, external_user_id: str
+    ) -> Conversation | None:
+        return db.scalars(
+            select(Conversation)
+            .where(Conversation.channel == channel, Conversation.external_user_id == external_user_id)
+            .order_by(Conversation.updated_at.desc())
+        ).first()
+
     def create(
         self,
         db: Session,

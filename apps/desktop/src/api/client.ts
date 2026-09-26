@@ -1,4 +1,4 @@
-import type { Character, CharacterPayload, Conversation, McpServer, Memory, MemoryPayload, Message, Provider, Skill } from '../types'
+import type { Channel, Character, CharacterPayload, Conversation, McpServer, Memory, MemoryPayload, Message, Provider, Skill } from '../types'
 
 const BACKEND_URL = 'http://127.0.0.1:8001'
 
@@ -95,6 +95,16 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name }),
     }),
+
+  listChannels: () => request<Channel[]>('/api/channels'),
+  connectChannel: (channel: string, body: { ws_url: string; access_token?: string | null }) =>
+    request<Channel[]>(`/api/channels/${channel}/connect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  disconnectChannel: (channel: string) =>
+    request<Channel[]>(`/api/channels/${channel}/disconnect`, { method: 'POST' }),
 
   async chatStream(
     body: ChatRequest,
