@@ -1,12 +1,13 @@
 import { create } from 'zustand'
 import { api } from '../api/client'
-import type { AgentStep, Conversation, Message, Provider, View } from '../types'
+import type { AgentStep, Character, CharacterPayload, Conversation, Message, Provider, View } from '../types'
 
 interface AppState {
   activeView: View
   activeConversationId: string | null
   conversations: Conversation[]
   providers: Provider[]
+  characters: Character[]
   messagesByConversation: Record<string, Message[]>
   streaming: boolean
   streamText: string
@@ -20,6 +21,10 @@ interface AppState {
   newConversation: () => Promise<void>
   sendMessage: (text: string, providerId: string | null, model: string | null) => Promise<void>
   clearError: () => void
+  createCharacter: (payload: CharacterPayload) => Promise<void>
+  updateCharacter: (id: string, payload: CharacterPayload) => Promise<void>
+  deleteCharacter: (id: string) => Promise<void>
+  setConversationCharacter: (conversationId: string, characterId: string | null) => Promise<void>
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -27,6 +32,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   activeConversationId: null,
   conversations: [],
   providers: [],
+  characters: [],
   messagesByConversation: {},
   streaming: false,
   streamText: '',
@@ -34,8 +40,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   error: null,
 
   init: async () => {
-    const [conversations, providers] = await Promise.all([api.listConversations(), api.listProviders()])
-    set({ conversations, providers })
+    const [conversations, providers, characters] = await Promise.all([
+      api.listConversations(),
+      api.listProviders(),
+      api.listCharacters(),
+    ])
+    set({ conversations, providers, characters })
   },
 
   reloadConversations: async () => {
@@ -121,4 +131,26 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   clearError: () => set({ error: null }),
+
+  createCharacter: async (payload) => {
+    const character = await api.createCharacter(payload)
+    set((s) => ({ characters: [...s.characters, character] }))
+  },
+
+  updateCharacter: async (id, payload) => {
+    const character = await api.updateCharacter(id, payload)
+    set((s) => ({ characters: s.characters.map((c) => (c.id === id ? character : c)) }))
+  },
+
+  deleteCharacter: async (id) => {
+    await api.deleteCharacter(id)
+    set((s) => ({ characters: s.characters.filter((c) => c.id !== id) }))
+  },
+
+  setConversationCharacter: async (conversationId, characterId) => {
+    const conversation = await api.patchConversation(conversationId, characterId)
+    set((s) => ({
+      conversations: s.conversations.map((c) => (c.id === conversationId ? conversation : c)),
+    }))
+  },
 }))

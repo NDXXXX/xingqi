@@ -12,12 +12,14 @@ export default function Chat() {
     activeConversationId,
     conversations,
     providers,
+    characters,
     messagesByConversation,
     streaming,
     streamText,
     error,
     sendMessage,
     clearError,
+    setConversationCharacter,
   } = useAppStore()
 
   const [input, setInput] = useState('')
@@ -40,6 +42,12 @@ export default function Chat() {
 
   const canSend = !streaming && options.length > 0
 
+  const currentCharacterId = conversation?.character_id ?? null
+  const handleCharacterChange = (value: string) => {
+    if (!activeConversationId) return
+    setConversationCharacter(activeConversationId, value || null)
+  }
+
   const handleSend = () => {
     const text = input.trim()
     if (!text || !canSend) return
@@ -51,8 +59,22 @@ export default function Chat() {
 
   return (
     <section className="flex h-full flex-col">
-      <header className="border-b border-neutral-800 px-4 py-3">
+      <header className="flex items-center justify-between border-b border-neutral-800 px-4 py-3">
         <h2 className="text-sm font-medium text-neutral-200">{conversation?.title ?? 'Chat'}</h2>
+        <select
+          value={currentCharacterId ?? ''}
+          onChange={(e) => handleCharacterChange(e.target.value)}
+          disabled={!activeConversationId}
+          title={activeConversationId ? '选择角色' : '先打开或新建一个会话'}
+          className="rounded-lg border border-neutral-700 bg-neutral-900 px-2 py-1 text-sm text-neutral-300 disabled:opacity-50"
+        >
+          <option value="">无角色</option>
+          {characters.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
+          ))}
+        </select>
       </header>
 
       <div className="flex-1 space-y-4 overflow-y-auto p-4">

@@ -75,3 +75,19 @@ class ModelConfig(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
     provider: Mapped["Provider"] = relationship(back_populates="models")
+
+
+class Character(Base):
+    __tablename__ = "characters"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(255))
+    avatar: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    personality: Mapped[str | None] = mapped_column(Text, nullable=True)
+    background: Mapped[str | None] = mapped_column(Text, nullable=True)
+    speaking_style: Mapped[str | None] = mapped_column(Text, nullable=True)
+    system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    default_model_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)

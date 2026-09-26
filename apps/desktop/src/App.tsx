@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from './api/client'
 import AgentRunPanel from './components/AgentRunPanel'
+import Characters from './components/Characters'
 import Chat from './components/Chat'
 import Placeholder from './components/Placeholder'
 import Settings from './components/Settings'
@@ -8,7 +9,6 @@ import Sidebar from './components/Sidebar'
 import { useAppStore } from './store/useAppStore'
 
 const PLACEHOLDER_TITLES: Record<string, string> = {
-  characters: 'Characters',
   memory: 'Memory',
   skills: 'Skills',
   mcp: 'MCP',
@@ -18,6 +18,7 @@ const PLACEHOLDER_TITLES: Record<string, string> = {
 function MainView() {
   const activeView = useAppStore((s) => s.activeView)
   if (activeView === 'chat') return <Chat />
+  if (activeView === 'characters') return <Characters />
   if (activeView === 'settings') return <Settings />
   return <Placeholder title={PLACEHOLDER_TITLES[activeView]} />
 }

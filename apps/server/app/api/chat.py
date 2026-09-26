@@ -8,8 +8,10 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..agent.runtime import run_agent
+from ..characters.prompts import build_system_prompt
 from ..database.db import SessionLocal, get_db
 from ..database.models import Provider
+from ..database.repositories.character_repository import CharacterRepository
 from ..database.repositories.conversation_repository import ConversationRepository
 from ..database.repositories.message_repository import MessageRepository
 from ..database.repositories.provider_repository import ProviderRepository
@@ -22,6 +24,7 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 conversation_repo = ConversationRepository()
 message_repo = MessageRepository()
 provider_repo = ProviderRepository()
+character_repo = CharacterRepository()
 
 # 最终答案在 SSE 里的分块大小（skeleton：agent loop 非流式，最终答案分块下发以保留打字机效果）。
 CHUNK_SIZE = 24
@@ -70,6 +73,10 @@ def _prepare(db: Session, req: ChatRequest):
 
     history = message_repo.list_by_conversation(db, conversation.id)
     llm_messages = [{"role": m.role, "content": m.content} for m in history]
+    if conversation.character_id:
+        character = character_repo.get(db, conversation.character_id)
+        if character is not None:
+            llm_messages.insert(0, {"role": "system", "content": build_system_prompt(character)})
     user_message_out = MessageOut.model_validate(user_message).model_dump(mode="json")
 
     return conversation, provider, model, llm_messages, user_message_out

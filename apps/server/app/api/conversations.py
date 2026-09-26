@@ -35,6 +35,10 @@ class ConversationCreate(BaseModel):
     model_id: str | None = None
 
 
+class ConversationUpdate(BaseModel):
+    character_id: str | None = None
+
+
 class ConversationOut(BaseModel):
     id: str
     title: str
@@ -70,6 +74,21 @@ def get_conversation(conversation_id: str, db: Session = Depends(get_db)) -> Con
     conversation = conversation_repo.get(db, conversation_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    return conversation
+
+
+@router.patch("/{conversation_id}", response_model=ConversationOut)
+def update_conversation(
+    conversation_id: str, payload: ConversationUpdate, db: Session = Depends(get_db)
+) -> Conversation:
+    conversation = conversation_repo.get(db, conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    updates = payload.model_dump(exclude_unset=True)
+    if "character_id" in updates:
+        conversation.character_id = updates["character_id"]
+    db.commit()
+    db.refresh(conversation)
     return conversation
 
 

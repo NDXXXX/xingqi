@@ -1,4 +1,4 @@
-import type { Conversation, Message, Provider } from '../types'
+import type { Character, CharacterPayload, Conversation, Message, Provider } from '../types'
 
 const BACKEND_URL = 'http://127.0.0.1:8001'
 
@@ -42,6 +42,27 @@ export const api = {
   listMessages: (conversationId: string) =>
     request<Message[]>(`/api/conversations/${conversationId}/messages`),
   listProviders: () => request<Provider[]>('/api/providers'),
+
+  listCharacters: () => request<Character[]>('/api/characters'),
+  createCharacter: (body: CharacterPayload) =>
+    request<Character>('/api/characters', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  updateCharacter: (id: string, body: CharacterPayload) =>
+    request<Character>(`/api/characters/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  deleteCharacter: (id: string) => request<void>(`/api/characters/${id}`, { method: 'DELETE' }),
+  patchConversation: (id: string, characterId: string | null) =>
+    request<Conversation>(`/api/conversations/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ character_id: characterId }),
+    }),
 
   async chatStream(
     body: ChatRequest,

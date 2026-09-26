@@ -49,3 +49,28 @@ export interface AgentStep {
   name: string
   status: 'done' | 'running'
 }
+
+export interface Character {
+  id: string
+  name: string
+  avatar: string | null
+  description: string | null
+  personality: string | null
+  background: string | null
+  speaking_style: string | null
+  system_prompt: string | null
+  default_model_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type CharacterPayload = {
+  name: string
+  avatar?: string | null
+  description?: string | null
+  personality?: string | null
+  background?: string | null
+  speaking_style?: string | null
+  system_prompt?: string | null
+  default_model_id?: string | null
+}

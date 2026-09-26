@@ -35,6 +35,6 @@ npm run dev      # 启动 Electron，并自动拉起 Python 后端
 
 ## 开发阶段
 
-当前进度：Phase 5（流式聊天：`/api/chat` 非流式 + `/api/chat/stream` SSE 流式，前端打字机效果）。
+当前进度：Phase 1-5 已完成；Phase 7 Agent 骨架（LangGraph 图 + Tool Calling + Agent Run 面板）与 Phase 6 Character 系统（角色 CRUD + 会话选角色 + system 提示词注入）已完成。
 
 详见 `设计文档v1.md`。
