@@ -1,4 +1,4 @@
-import type { Character, CharacterPayload, Conversation, Memory, MemoryPayload, Message, Provider } from '../types'
+import type { Character, CharacterPayload, Conversation, Memory, MemoryPayload, Message, Provider, Skill } from '../types'
 
 const BACKEND_URL = 'http://127.0.0.1:8001'
 
@@ -78,6 +78,9 @@ export const api = {
       body: JSON.stringify(body),
     }),
   deleteMemory: (id: string) => request<void>(`/api/memories/${id}`, { method: 'DELETE' }),
+
+  listSkills: () => request<Skill[]>('/api/skills'),
+  reloadSkills: () => request<Skill[]>('/api/skills/reload', { method: 'POST' }),
 
   async chatStream(
     body: ChatRequest,

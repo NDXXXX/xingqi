@@ -20,6 +20,7 @@ from ..database.repositories.provider_repository import ProviderRepository
 from ..memory.manager import MemoryManager
 from ..memory.retriever import retrieve
 from ..providers.router import provider_router
+from ..skills.registry import default_registry as skill_registry
 from ..tools.registry import default_registry
 from .conversations import MessageOut
 
@@ -90,6 +91,9 @@ def _prepare(db: Session, req: ChatRequest):
     relevant = retrieve(req.message, memory_repo.list(db))
     if relevant:
         system_parts.append("相关记忆：\n" + "\n".join(f"- {m.content}" for m in relevant))
+    matched = skill_registry.match(req.message)
+    if matched:
+        system_parts.append("可用技能：\n" + "\n\n".join(f"技能：{s.name}\n{s.content}" for s in matched))
     if system_parts:
         llm_messages.insert(0, {"role": "system", "content": "\n\n".join(system_parts)})
 

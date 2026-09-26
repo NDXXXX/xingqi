@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { api } from '../api/client'
-import type { AgentStep, Character, CharacterPayload, Conversation, Memory, MemoryPayload, Message, Provider, View } from '../types'
+import type { AgentStep, Character, CharacterPayload, Conversation, Memory, MemoryPayload, Message, Provider, Skill, View } from '../types'
 
 interface AppState {
   activeView: View
@@ -9,6 +9,7 @@ interface AppState {
   providers: Provider[]
   characters: Character[]
   memories: Memory[]
+  skills: Skill[]
   messagesByConversation: Record<string, Message[]>
   streaming: boolean
   streamText: string
@@ -29,6 +30,7 @@ interface AppState {
   createMemory: (payload: MemoryPayload) => Promise<void>
   updateMemory: (id: string, payload: MemoryPayload) => Promise<void>
   deleteMemory: (id: string) => Promise<void>
+  reloadSkills: () => Promise<void>
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -38,6 +40,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   providers: [],
   characters: [],
   memories: [],
+  skills: [],
   messagesByConversation: {},
   streaming: false,
   streamText: '',
@@ -45,13 +48,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   error: null,
 
   init: async () => {
-    const [conversations, providers, characters, memories] = await Promise.all([
+    const [conversations, providers, characters, memories, skills] = await Promise.all([
       api.listConversations(),
       api.listProviders(),
       api.listCharacters(),
       api.listMemories(),
+      api.listSkills(),
     ])
-    set({ conversations, providers, characters, memories })
+    set({ conversations, providers, characters, memories, skills })
   },
 
   reloadConversations: async () => {
@@ -173,5 +177,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   deleteMemory: async (id) => {
     await api.deleteMemory(id)
     set((s) => ({ memories: s.memories.filter((m) => m.id !== id) }))
+  },
+
+  reloadSkills: async () => {
+    const skills = await api.reloadSkills()
+    set({ skills })
   },
 }))

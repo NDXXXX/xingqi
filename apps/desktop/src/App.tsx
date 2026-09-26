@@ -5,12 +5,12 @@ import Characters from './components/Characters'
 import Chat from './components/Chat'
 import Memory from './components/Memory'
 import Placeholder from './components/Placeholder'
+import Skills from './components/Skills'
 import Settings from './components/Settings'
 import Sidebar from './components/Sidebar'
 import { useAppStore } from './store/useAppStore'
 
 const PLACEHOLDER_TITLES: Record<string, string> = {
-  skills: 'Skills',
   mcp: 'MCP',
   channels: 'Channels',
 }
@@ -20,6 +20,7 @@ function MainView() {
   if (activeView === 'chat') return <Chat />
   if (activeView === 'characters') return <Characters />
   if (activeView === 'memory') return <Memory />
+  if (activeView === 'skills') return <Skills />
   if (activeView === 'settings') return <Settings />
   return <Placeholder title={PLACEHOLDER_TITLES[activeView]} />
 }

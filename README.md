@@ -35,6 +35,6 @@ npm run dev      # 启动 Electron，并自动拉起 Python 后端
 
 ## 开发阶段
 
-当前进度：Phase 1-5 已完成；Phase 6 Character、Phase 7 Agent 骨架（LangGraph + Tool Calling + Agent Run 面板）、Phase 8 Memory（提取/存储/检索）已完成。
+当前进度：Phase 1-5 已完成；Phase 6 Character、Phase 7 Agent 骨架（LangGraph + Tool Calling + Agent Run 面板）、Phase 8 Memory（提取/存储/检索）、Phase 9 Skills（加载/匹配/注入）已完成。
 
 详见 `设计文档v1.md`。
