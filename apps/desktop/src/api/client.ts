@@ -1,4 +1,4 @@
-import type { Character, CharacterPayload, Conversation, Message, Provider } from '../types'
+import type { Character, CharacterPayload, Conversation, Memory, MemoryPayload, Message, Provider } from '../types'
 
 const BACKEND_URL = 'http://127.0.0.1:8001'
 
@@ -63,6 +63,21 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ character_id: characterId }),
     }),
+
+  listMemories: () => request<Memory[]>('/api/memories'),
+  createMemory: (body: MemoryPayload) =>
+    request<Memory>('/api/memories', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  updateMemory: (id: string, body: MemoryPayload) =>
+    request<Memory>(`/api/memories/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  deleteMemory: (id: string) => request<void>(`/api/memories/${id}`, { method: 'DELETE' }),
 
   async chatStream(
     body: ChatRequest,

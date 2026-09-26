@@ -74,3 +74,19 @@ export type CharacterPayload = {
   system_prompt?: string | null
   default_model_id?: string | null
 }
+
+export interface Memory {
+  id: string
+  user_id: string | null
+  type: string
+  content: string
+  importance: number
+  created_at: string
+  updated_at: string
+}
+
+export type MemoryPayload = {
+  type: string
+  content: string
+  importance?: number
+}

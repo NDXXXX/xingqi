@@ -1,6 +1,7 @@
 """Chat API：非流式 /api/chat 与流式 /api/chat/stream（SSE），均走 Agent。"""
 
 import json
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -14,10 +15,15 @@ from ..database.models import Provider
 from ..database.repositories.character_repository import CharacterRepository
 from ..database.repositories.conversation_repository import ConversationRepository
 from ..database.repositories.message_repository import MessageRepository
+from ..database.repositories.memory_repository import MemoryRepository
 from ..database.repositories.provider_repository import ProviderRepository
+from ..memory.manager import MemoryManager
+from ..memory.retriever import retrieve
 from ..providers.router import provider_router
 from ..tools.registry import default_registry
 from .conversations import MessageOut
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -25,6 +31,8 @@ conversation_repo = ConversationRepository()
 message_repo = MessageRepository()
 provider_repo = ProviderRepository()
 character_repo = CharacterRepository()
+memory_repo = MemoryRepository()
+memory_manager = MemoryManager()
 
 # 最终答案在 SSE 里的分块大小（skeleton：agent loop 非流式，最终答案分块下发以保留打字机效果）。
 CHUNK_SIZE = 24
@@ -73,10 +81,18 @@ def _prepare(db: Session, req: ChatRequest):
 
     history = message_repo.list_by_conversation(db, conversation.id)
     llm_messages = [{"role": m.role, "content": m.content} for m in history]
+
+    system_parts: list[str] = []
     if conversation.character_id:
         character = character_repo.get(db, conversation.character_id)
         if character is not None:
-            llm_messages.insert(0, {"role": "system", "content": build_system_prompt(character)})
+            system_parts.append(build_system_prompt(character))
+    relevant = retrieve(req.message, memory_repo.list(db))
+    if relevant:
+        system_parts.append("相关记忆：\n" + "\n".join(f"- {m.content}" for m in relevant))
+    if system_parts:
+        llm_messages.insert(0, {"role": "system", "content": "\n\n".join(system_parts)})
+
     user_message_out = MessageOut.model_validate(user_message).model_dump(mode="json")
 
     return conversation, provider, model, llm_messages, user_message_out
@@ -102,6 +118,10 @@ async def chat(req: ChatRequest, db: Session = Depends(get_db)) -> dict:
 
     assistant = message_repo.create(db, conversation_id=conversation.id, role="assistant", content=final_response)
     conversation_repo.touch(db, conversation.id, model)
+    try:
+        await memory_manager.extract_and_save(db, p, model, req.message, final_response)
+    except Exception as e:
+        logger.warning("memory extraction failed: %s", e)
     return {
         "conversation_id": conversation.id,
         "user_message": user_message_out,
@@ -137,6 +157,10 @@ async def chat_stream(req: ChatRequest, db: Session = Depends(get_db)) -> Stream
         try:
             assistant = message_repo.create(session, conversation_id=conversation_id, role="assistant", content=final_response)
             conversation_repo.touch(session, conversation_id, model)
+            try:
+                await memory_manager.extract_and_save(session, p, model, req.message, final_response)
+            except Exception as e:
+                logger.warning("memory extraction failed: %s", e)
             assistant_out = MessageOut.model_validate(assistant).model_dump(mode="json")
         finally:
             session.close()
