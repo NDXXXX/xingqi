@@ -1,0 +1,56 @@
+"""Conversation 仓储。"""
+
+from uuid import uuid4
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from ..models import Conversation, utcnow
+
+
+class ConversationRepository:
+    def list(self, db: Session) -> list[Conversation]:
+        return list(db.scalars(select(Conversation).order_by(Conversation.updated_at.desc())))
+
+    def get(self, db: Session, conversation_id: str) -> Conversation | None:
+        return db.get(Conversation, conversation_id)
+
+    def create(
+        self,
+        db: Session,
+        *,
+        title: str,
+        channel: str,
+        character_id: str | None = None,
+        external_user_id: str | None = None,
+        model_id: str | None = None,
+    ) -> Conversation:
+        conversation = Conversation(
+            id=str(uuid4()),
+            title=title,
+            channel=channel,
+            character_id=character_id,
+            external_user_id=external_user_id,
+            model_id=model_id,
+        )
+        db.add(conversation)
+        db.commit()
+        db.refresh(conversation)
+        return conversation
+
+    def delete(self, db: Session, conversation_id: str) -> bool:
+        conversation = self.get(db, conversation_id)
+        if conversation is None:
+            return False
+        db.delete(conversation)
+        db.commit()
+        return True
+
+    def touch(self, db: Session, conversation_id: str, model_id: str | None = None) -> None:
+        conversation = self.get(db, conversation_id)
+        if conversation is None:
+            return
+        if model_id is not None:
+            conversation.model_id = model_id
+        conversation.updated_at = utcnow()
+        db.commit()
