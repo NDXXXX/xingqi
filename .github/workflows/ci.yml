@@ -5,35 +5,22 @@ on:
   pull_request:
 
 jobs:
-  test-and-build:
-    runs-on: macos-latest
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: apps/desktop/package-lock.json
-
-      - name: Install backend dependencies
-        working-directory: apps/server
+      - name: Install dependencies
         run: uv sync --locked --dev
-      - name: Test backend
-        working-directory: apps/server
+      - name: Test
         run: uv run pytest -q
-
-      - name: Install desktop dependencies
-        working-directory: apps/desktop
-        run: npm ci
-      - name: Test and typecheck desktop
-        working-directory: apps/desktop
-        run: npm test && npm run typecheck
-      - name: Electron end-to-end test
-        working-directory: apps/desktop
-        run: npm run test:e2e
-      - name: Build desktop and packaged backend
-        working-directory: apps/desktop
-        run: npm run build:backend && npm run build
+      - name: CLI smoke test
+        run: uv run zhiyu --help
+      - name: Build wheel
+        run: uv build
