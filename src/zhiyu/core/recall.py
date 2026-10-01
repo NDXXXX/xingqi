@@ -9,45 +9,68 @@ from zhiyu.infrastructure.database.repositories.message_repository import Messag
 
 
 def last_local_conversation(
-    db: Session, *, exclude_conversation_id: str | None = None
+    db: Session,
+    identity_id: str,
+    *,
+    exclude_conversation_id: str | None = None,
 ) -> Conversation | None:
     """最近一条有消息的本地会话，作为默认续接对象。"""
     conversations = ConversationRepository()
     messages = MessageRepository()
     for conv in conversations.list(db):
-        if conv.channel != "local" or conv.id == exclude_conversation_id:
+        if (
+            conv.channel != "local"
+            or conv.identity_id != identity_id
+            or conv.id == exclude_conversation_id
+        ):
             continue
         if messages.list_by_conversation(db, conv.id):
             return conv
     return None
 
 
-def list_goals(db: Session, identity_id: str | None) -> list[str]:
+def list_goals(db: Session, identity_id: str) -> list[str]:
     """进行中的目标/项目（goal/project 记忆）。"""
     return [
         m.content
-        for m in MemoryRepository().list(db, identity_id)
+        for m in MemoryRepository().list_visible(db, identity_id)
         if m.type in ("goal", "project")
-    ]
+    ][:3]
 
 
 def build_recall(
     db: Session,
-    identity_id: str | None,
+    identity_id: str,
     *,
     exclude_conversation_id: str | None = None,
 ) -> str | None:
     """生成 fresh 会话首 turn 的续作上下文；无内容返回 None。"""
-    last = last_local_conversation(db, exclude_conversation_id=exclude_conversation_id)
+    if not identity_id:
+        return None
+    last = last_local_conversation(
+        db, identity_id, exclude_conversation_id=exclude_conversation_id
+    )
     goals = list_goals(db, identity_id)
 
     parts: list[str] = []
     if last is not None:
         msgs = MessageRepository().list_by_conversation(db, last.id)
-        tail = [f"{'你' if m.role == 'user' else '助手'}: {m.content}" for m in msgs[-6:]]
+        tail: list[str] = []
+        used = 0
+        for message in reversed(msgs[-6:]):
+            line = f"{'你' if message.role == 'user' else '助手'}: {message.content}"
+            remaining = 2400 - used
+            if remaining <= 0:
+                break
+            if len(line) > remaining:
+                line = line[: max(0, remaining - 1)] + "…"
+            tail.append(line)
+            used += len(line)
+        tail.reverse()
         parts.append(f"上次会话「{last.title}」末尾：\n" + "\n".join(tail))
     if goals:
-        parts.append("用户进行中的目标/项目：" + "；".join(goals))
+        goal_text = "；".join(goals)
+        parts.append("用户进行中的目标/项目：" + goal_text[:600])
 
     return "\n\n".join(parts) if parts else None
 

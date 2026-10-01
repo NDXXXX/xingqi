@@ -3,13 +3,15 @@
 from zhiyu.infrastructure.database.models import Memory
 from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository
 from zhiyu.infrastructure.database.repositories.memory_repository import MemoryRepository
-from zhiyu.core.memory.extractor import parse_candidates
+from zhiyu.core.memory.extractor import parse_candidates, parse_operations
 from zhiyu.core.memory.manager import MemoryManager
 from zhiyu.core.memory.retriever import retrieve
 
 
 def _memory(content: str, importance: float = 0.5, type: str = "fact") -> Memory:
-    return Memory(id="m", user_id=None, type=type, content=content, importance=importance)
+    return Memory(
+        id="m", user_id=None, type=type, content=content, importance=importance, status="active"
+    )
 
 
 def test_retrieve_ranks_relevant_first():
@@ -51,8 +53,15 @@ def test_parse_candidates_invalid():
 def test_is_duplicate():
     existing = [_memory("用户喜欢咖啡")]
     assert MemoryManager._is_duplicate("用户喜欢咖啡", existing) is True
-    assert MemoryManager._is_duplicate("喜欢咖啡", existing) is True
+    assert MemoryManager._is_duplicate("喜欢咖啡", existing) is False
     assert MemoryManager._is_duplicate("用户喜欢茶", existing) is False
+
+
+def test_parse_operations_rejects_invalid_batch():
+    assert parse_operations('[{"action":"add","type":"fact","content":"用户在北京"}]') == []
+    assert parse_operations('[{"action":"complete","target_id":"m1","evidence":"完成了"}]') == [
+        {"action": "complete", "target_id": "m1", "evidence": "完成了"}
+    ]
 
 
 def test_memories_are_isolated_by_identity():

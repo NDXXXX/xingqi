@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -103,6 +103,7 @@ class Character(Base):
 
 class Memory(Base):
     __tablename__ = "memories"
+    __table_args__ = (Index("ix_memories_identity_status", "identity_id", "status"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     user_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
@@ -111,6 +112,45 @@ class Memory(Base):
     type: Mapped[str] = mapped_column(String(32))
     content: Mapped[str] = mapped_column(Text)
     importance: Mapped[float] = mapped_column(Float, default=0.5)
+    status: Mapped[str] = mapped_column(String(32), default="active")
+    source_message_id: Mapped[str | None] = mapped_column(
+        ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
+    )
+    status_source_message_id: Mapped[str | None] = mapped_column(
+        ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
+    )
+    supersedes_id: Mapped[str | None] = mapped_column(
+        ForeignKey("memories.id", ondelete="SET NULL"), nullable=True
+    )
+    origin: Mapped[str] = mapped_column(String(32), default="automatic")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class MemoryJob(Base):
+    __tablename__ = "memory_jobs"
+    __table_args__ = (
+        UniqueConstraint("user_message_id", name="uq_memory_jobs_user_message"),
+        Index("ix_memory_jobs_status_created", "status", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_message_id: Mapped[str] = mapped_column(
+        ForeignKey("messages.id", ondelete="CASCADE"), nullable=False
+    )
+    assistant_message_id: Mapped[str | None] = mapped_column(
+        ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
+    )
+    identity_id: Mapped[str] = mapped_column(
+        ForeignKey("identities.id", ondelete="CASCADE"), nullable=False
+    )
+    provider_id: Mapped[str | None] = mapped_column(
+        ForeignKey("providers.id", ondelete="SET NULL"), nullable=True
+    )
+    model: Mapped[str] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(32), default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 

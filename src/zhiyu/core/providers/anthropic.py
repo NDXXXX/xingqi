@@ -83,6 +83,8 @@ class AnthropicProvider(AIProvider):
             raise ValueError("缺少 model")
         system, converted_messages = self._payload_messages(messages)
         payload: dict[str, Any] = {"model": model, "messages": converted_messages, "max_tokens": 1024, "stream": stream}
+        if "temperature" in kwargs:
+            payload["temperature"] = kwargs["temperature"]
         if system:
             payload["system"] = system
         converted_tools = self._payload_tools(tools)

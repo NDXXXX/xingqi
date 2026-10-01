@@ -3,7 +3,6 @@
 import asyncio
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
-import logging
 
 from sqlalchemy.orm import Session
 
@@ -11,6 +10,7 @@ from zhiyu.core.agent.context import build_tool_registry, with_agent_context
 from zhiyu.core.agent.run_manager import active_runs
 from zhiyu.core.agent.runtime import run_agent, run_agent_stream
 from zhiyu.core.memory.manager import MemoryManager
+from zhiyu.application.memory_jobs import MemoryJobProcessor
 from zhiyu.core.recall import build_recall
 from zhiyu.core.providers.router import ProviderRouter, provider_router
 from zhiyu.core.providers.selection import ProviderSelectionError, select_provider_model
@@ -19,9 +19,7 @@ from zhiyu.infrastructure.database.repositories.agent_run_repository import Agen
 from zhiyu.infrastructure.database.repositories.conversation_repository import ConversationRepository
 from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository
 from zhiyu.infrastructure.database.repositories.message_repository import MessageRepository
-
-logger = logging.getLogger(__name__)
-
+from zhiyu.infrastructure.database.repositories.memory_job_repository import MemoryJobRepository
 
 class ConversationNotFoundError(ValueError):
     pass
@@ -52,12 +50,16 @@ class ChatService:
         session_factory: Callable[[], Session] = SessionLocal,
         providers: ProviderRouter = provider_router,
         memory_manager: MemoryManager | None = None,
+        memory_processor: MemoryJobProcessor | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.providers = providers
-        self.memory_manager = memory_manager or MemoryManager()
+        self.memory_processor = memory_processor or MemoryJobProcessor(
+            session_factory, providers, memory_manager
+        )
         self.conversations = ConversationRepository()
         self.messages = MessageRepository()
+        self.memory_jobs = MemoryJobRepository()
         self.identities = IdentityRepository()
         self.runs = AgentRunRepository()
 
@@ -111,7 +113,7 @@ class ChatService:
                 raise ValueError("没有可以重新生成的用户消息")
             request.message = user_message.content
         else:
-            self.messages.create(
+            user_message = self.messages.create(
                 db,
                 conversation_id=conversation.id,
                 role="user",
@@ -134,7 +136,13 @@ class ChatService:
             model_config.max_output_tokens,
             recall=recall,
         )
-        return conversation, provider, model_config.model_name, llm_messages
+        return (
+            conversation,
+            provider,
+            model_config.model_name,
+            llm_messages,
+            user_message.id,
+        )
 
     async def run(
         self,
@@ -145,7 +153,13 @@ class ChatService:
         db = self.session_factory()
         run = None
         try:
-            conversation, provider_config, model, llm_messages = self._prepare(db, request)
+            (
+                conversation,
+                provider_config,
+                model,
+                llm_messages,
+                user_message_id,
+            ) = self._prepare(db, request)
             provider = self.providers.get_provider(provider_config)
             registry = build_tool_registry()
             run = self.runs.create(db, conversation.id, provider_config.id, model)
@@ -165,25 +179,26 @@ class ChatService:
                     final_response = event["final_response"]
                 yield event
 
-            self.messages.create(
+            assistant_message = self.messages.create(
                 db,
                 conversation_id=conversation.id,
                 role="assistant",
                 content=final_response,
+                commit=False,
             )
-            self.conversations.touch(db, conversation.id, model)
-            try:
-                await self.memory_manager.extract_and_save(
+            if not request.regenerate and conversation.identity_id:
+                self.memory_jobs.create(
                     db,
-                    provider,
-                    model,
-                    request.message,
-                    final_response,
-                    conversation.identity_id,
+                    user_message_id=user_message_id,
+                    assistant_message_id=assistant_message.id,
+                    identity_id=conversation.identity_id,
+                    provider_id=provider_config.id,
+                    model=model,
                 )
-            except Exception as exc:
-                logger.warning("memory extraction failed: %s", exc)
+            db.commit()
+            self.conversations.touch(db, conversation.id, model)
             self.runs.finish(db, run.id, "completed")
+            self.memory_processor.kick()
             yield {
                 "type": "done",
                 "run_id": run.id,

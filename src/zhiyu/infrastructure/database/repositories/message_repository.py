@@ -18,7 +18,15 @@ class MessageRepository:
             )
         )
 
-    def create(self, db: Session, *, conversation_id: str, role: str, content: str) -> Message:
+    def create(
+        self,
+        db: Session,
+        *,
+        conversation_id: str,
+        role: str,
+        content: str,
+        commit: bool = True,
+    ) -> Message:
         message = Message(
             id=str(uuid4()),
             conversation_id=conversation_id,
@@ -26,8 +34,11 @@ class MessageRepository:
             content=content,
         )
         db.add(message)
-        db.commit()
-        db.refresh(message)
+        if commit:
+            db.commit()
+            db.refresh(message)
+        else:
+            db.flush()
         return message
 
     def prepare_regeneration(self, db: Session, conversation_id: str) -> Message | None:

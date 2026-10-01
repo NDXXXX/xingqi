@@ -16,6 +16,7 @@ from zhiyu.infrastructure.database.db import Base
 from zhiyu.infrastructure.database.repositories.conversation_repository import ConversationRepository
 from zhiyu.infrastructure.database.repositories.memory_repository import MemoryRepository
 from zhiyu.infrastructure.database.repositories.message_repository import MessageRepository
+from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository
 
 
 def _session():
@@ -25,7 +26,10 @@ def _session():
 
 
 def _conversation_with_messages(db, title="旧会话", n=2):
-    conv = ConversationRepository().create(db, title=title, channel="local")
+    identity = IdentityRepository().local(db)
+    conv = ConversationRepository().create(
+        db, title=title, channel="local", identity_id=identity.id
+    )
     for i in range(n):
         MessageRepository().create(db, conversation_id=conv.id, role="user", content=f"问题{i}")
         MessageRepository().create(db, conversation_id=conv.id, role="assistant", content=f"回答{i}")
@@ -34,15 +38,17 @@ def _conversation_with_messages(db, title="旧会话", n=2):
 
 def test_build_recall_none_when_no_history():
     db = _session()
-    assert build_recall(db, None) is None
+    identity = IdentityRepository().local(db)
+    assert build_recall(db, identity.id) is None
     db.close()
 
 
 def test_build_recall_includes_last_conversation_tail():
     db = _session()
+    identity = IdentityRepository().local(db)
     _conversation_with_messages(db)
 
-    context = build_recall(db, None)
+    context = build_recall(db, identity.id)
 
     assert context is not None
     assert "旧会话" in context
@@ -52,10 +58,11 @@ def test_build_recall_includes_last_conversation_tail():
 
 def test_build_recall_excludes_current_conversation():
     db = _session()
+    identity = IdentityRepository().local(db)
     current = _conversation_with_messages(db, title="当前会话")
     _conversation_with_messages(db, title="上一次会话")
 
-    context = build_recall(db, None, exclude_conversation_id=current.id)
+    context = build_recall(db, identity.id, exclude_conversation_id=current.id)
 
     assert context is not None
     assert "上一次会话" in context
@@ -65,9 +72,12 @@ def test_build_recall_excludes_current_conversation():
 
 def test_build_recall_includes_goals():
     db = _session()
-    MemoryRepository().create(db, type="goal", content="完成 MCP 接入")
+    identity = IdentityRepository().local(db)
+    MemoryRepository().create(
+        db, type="goal", content="完成 MCP 接入", identity_id=identity.id
+    )
 
-    context = build_recall(db, None)
+    context = build_recall(db, identity.id)
 
     assert context is not None
     assert "完成 MCP 接入" in context
@@ -76,28 +86,33 @@ def test_build_recall_includes_goals():
 
 def test_last_local_conversation_skips_empty():
     db = _session()
-    ConversationRepository().create(db, title="空会话", channel="local")
+    identity = IdentityRepository().local(db)
+    ConversationRepository().create(
+        db, title="空会话", channel="local", identity_id=identity.id
+    )
 
-    assert last_local_conversation(db) is None
+    assert last_local_conversation(db, identity.id) is None
     db.close()
 
 
 def test_last_local_conversation_returns_most_recent():
     db = _session()
+    identity = IdentityRepository().local(db)
     _conversation_with_messages(db, title="旧")
     _conversation_with_messages(db, title="新")
 
-    assert last_local_conversation(db).title == "新"
+    assert last_local_conversation(db, identity.id).title == "新"
     db.close()
 
 
 def test_list_goals_filters_types():
     db = _session()
-    MemoryRepository().create(db, type="goal", content="目标A")
-    MemoryRepository().create(db, type="project", content="项目B")
-    MemoryRepository().create(db, type="fact", content="事实C")
+    identity = IdentityRepository().local(db)
+    MemoryRepository().create(db, type="goal", content="目标A", identity_id=identity.id)
+    MemoryRepository().create(db, type="project", content="项目B", identity_id=identity.id)
+    MemoryRepository().create(db, type="fact", content="事实C", identity_id=identity.id)
 
-    assert set(list_goals(db, None)) == {"目标A", "项目B"}
+    assert set(list_goals(db, identity.id)) == {"目标A", "项目B"}
     db.close()
 
 

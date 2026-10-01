@@ -37,6 +37,28 @@ uv run zhiyu provider default work gpt-4o-mini
 uv run zhiyu chat
 ```
 
+查看和纠正长期记忆：
+
+```bash
+uv run zhiyu memory list
+uv run zhiyu memory search "咖啡"
+uv run zhiyu memory add --type preference --content "用户喜欢简洁回答"
+uv run zhiyu memory edit <id> --content "用户喜欢详细解释"
+uv run zhiyu memory complete <id>
+uv run zhiyu memory forget <id>
+uv run zhiyu memory status
+uv run zhiyu memory sync
+uv run zhiyu memory retry
+```
+
+聊天结束后，长期记忆由持久化后台任务提取；单次 CLI 退出也不会丢失任务。常驻 TUI/QQ 会自动处理，`memory sync` 可手动恢复和执行待处理任务。
+
+使用已配置的 Provider 运行固定记忆语义评估集：
+
+```bash
+PYTHONPATH=src uv run python scripts/evaluate_memory.py --provider deepseek --model deepseek-chat
+```
+
 非交互环境通过环境变量提供密钥：
 
 ```bash

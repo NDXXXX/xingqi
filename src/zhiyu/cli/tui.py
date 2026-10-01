@@ -7,6 +7,7 @@ from textual import on, work
 
 from zhiyu.application.characters import CharacterService
 from zhiyu.application.chat import ChatRequest, ChatService
+from zhiyu.application.memories import MemoryService
 from zhiyu.core.recall import format_welcome
 
 
@@ -43,6 +44,7 @@ class ChatApp(App):
         model: str | None = None,
         service: ChatService | None = None,
         characters: CharacterService | None = None,
+        memories: MemoryService | None = None,
         continuing_title: str | None = None,
         goals: list[str] | None = None,
     ) -> None:
@@ -52,6 +54,7 @@ class ChatApp(App):
         self._model = model
         self._service = service or ChatService()
         self._characters = characters or CharacterService()
+        self._memories = memories or MemoryService()
         self._verbose = "off"
         self._continuing_title = continuing_title
         self._goals = goals or []
@@ -63,6 +66,7 @@ class ChatApp(App):
         yield Input(placeholder="输入消息，/help 查看命令", id="input")
 
     async def on_mount(self) -> None:
+        self._service.memory_processor.kick()
         self.query_one("#input", Input).focus()
         self._set_status("idle")
         welcome = format_welcome(self._continuing_title, self._goals)
@@ -109,7 +113,7 @@ class ChatApp(App):
         if text == "/exit":
             self.exit()
         elif text == "/help":
-            await self._add(Static("命令：/new /history /model [name] /character [id] /verbose [on|full|off] /tools /clear /exit"))
+            await self._add(Static("命令：/new /history /model [name] /character [id] /memory /remember <type> <content> /forget <id> /verbose [on|full|off] /tools /clear /exit"))
         elif text == "/new":
             self._conversation_id = None
             await self._add(Static("已开始新会话"))
@@ -147,6 +151,29 @@ class ChatApp(App):
                 else:
                     self._characters.assign_to_conversation(self._conversation_id, cid)
                     await self._add(Static("角色已切换"))
+            except ValueError as exc:
+                await self._add(Static(f"错误：{exc}"))
+        elif text == "/memory":
+            items = self._memories.list()
+            content = "\n".join(
+                f"[{item.id}] {item.type}/{item.status} {item.content}" for item in items
+            ) or "尚无记忆"
+            await self._add(Static(content))
+        elif text.startswith("/remember "):
+            parts = text.removeprefix("/remember ").strip().split(maxsplit=1)
+            if len(parts) != 2:
+                await self._add(Static("用法：/remember <type> <content>"))
+            else:
+                try:
+                    item = self._memories.add(type=parts[0], content=parts[1])
+                    await self._add(Static(f"已记住 {item.content} [{item.id}]"))
+                except ValueError as exc:
+                    await self._add(Static(f"错误：{exc}"))
+        elif text.startswith("/forget "):
+            memory_id = text.removeprefix("/forget ").strip()
+            try:
+                self._memories.forget(memory_id)
+                await self._add(Static(f"已删除记忆 {memory_id}；历史聊天未删除"))
             except ValueError as exc:
                 await self._add(Static(f"错误：{exc}"))
         else:

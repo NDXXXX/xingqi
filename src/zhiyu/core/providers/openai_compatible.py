@@ -21,6 +21,8 @@ class OpenAICompatibleProvider(AIProvider):
         if not model:
             raise ValueError("缺少 model")
         payload: dict[str, Any] = {"model": model, "messages": messages, "stream": stream}
+        if "temperature" in kwargs:
+            payload["temperature"] = kwargs["temperature"]
         if tools:
             payload["tools"] = tools
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}

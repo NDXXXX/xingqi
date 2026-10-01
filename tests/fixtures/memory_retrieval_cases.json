@@ -1,0 +1,22 @@
+[
+  {"id":"local-ai","query":"继续本地 AI 助手项目","target":"用户正在开发一个本地 AI 助手","synonym":false},
+  {"id":"coriander","query":"早餐不要放香菜","target":"用户不吃香菜","synonym":false},
+  {"id":"answer-style","query":"回答请详细一点","target":"用户喜欢详细回答","synonym":false},
+  {"id":"coffee","query":"咖啡推荐","target":"用户不希望收到咖啡推荐","synonym":false},
+  {"id":"mcp","query":"MCP 接入进度","target":"用户正在完成 MCP 接入","synonym":false},
+  {"id":"japanese","query":"日语 N1 学习","target":"用户的目标是通过日语 N1","synonym":false},
+  {"id":"hangzhou","query":"杭州生活怎么样","target":"用户目前住在杭州","synonym":false},
+  {"id":"sister","query":"姐姐王敏","target":"王敏是用户的姐姐","synonym":false},
+  {"id":"game-job","query":"游戏公司的工作","target":"用户在一家游戏公司工作","synonym":false},
+  {"id":"partner","query":"李雷这个合伙人","target":"李雷是用户的合伙人","synonym":false},
+  {"id":"english","query":"用英语工作","target":"用户能用英语工作","synonym":false},
+  {"id":"website","query":"个人网站上线","target":"用户正在制作个人网站","synonym":false},
+  {"id":"morning-run","query":"晨跑安排","target":"用户习惯早晨跑步","synonym":true},
+  {"id":"cat-allergy","query":"猫过敏注意事项","target":"用户对猫过敏","synonym":false},
+  {"id":"science-fiction","query":"推荐科幻小说","target":"用户喜欢科幻小说","synonym":false},
+  {"id":"swimming","query":"每周游泳计划","target":"用户每周游泳两次","synonym":false},
+  {"id":"business-trip","query":"北京出差安排","target":"用户经常去北京出差","synonym":false},
+  {"id":"vegetarian","query":"无肉餐推荐","target":"用户偏好素食饮食","synonym":true},
+  {"id":"python","query":"Python 项目继续做","target":"用户正在维护一个 Python 项目","synonym":false},
+  {"id":"mother-birthday","query":"妈妈生日礼物","target":"用户妈妈的生日是五月十日","synonym":false}
+]

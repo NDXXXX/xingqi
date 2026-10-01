@@ -9,6 +9,7 @@ class _FakeService:
     def __init__(self, events):
         self._events = events
         self.called = False
+        self.memory_processor = type("Processor", (), {"kick": lambda self: None})()
 
     async def run(self, request):
         self.called = True

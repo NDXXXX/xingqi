@@ -10,6 +10,7 @@ from zhiyu.infrastructure.database.db import Base
 from zhiyu.infrastructure.database.repositories.character_repository import CharacterRepository
 from zhiyu.infrastructure.database.repositories.conversation_repository import ConversationRepository
 from zhiyu.infrastructure.database.repositories.memory_repository import MemoryRepository
+from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository
 
 
 def _session():
@@ -24,11 +25,14 @@ def test_build_tool_registry_contains_builtins():
 
 def test_with_agent_context_injects_character_and_memory():
     db = _session()
+    identity = IdentityRepository().local(db)
     character = CharacterRepository().create(db, name="Luna", personality="温柔")
     conversation = ConversationRepository().create(
-        db, title="chat", channel="local", character_id=character.id
+        db, title="chat", channel="local", character_id=character.id, identity_id=identity.id
     )
-    MemoryRepository().create(db, type="preference", content="用户喜欢咖啡")
+    MemoryRepository().create(
+        db, type="preference", content="用户喜欢咖啡", identity_id=identity.id
+    )
 
     messages = with_agent_context(
         db,

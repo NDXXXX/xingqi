@@ -13,6 +13,8 @@ from zhiyu.application.channels import ChannelService
 from zhiyu.application.characters import CharacterService
 from zhiyu.application.chat import ChatRequest, ChatService
 from zhiyu.application.doctor import run_checks
+from zhiyu.application.memories import MemoryService
+from zhiyu.application.memory_jobs import MemoryJobProcessor
 from zhiyu.application.providers import ProviderService
 from zhiyu.core.recall import format_welcome, last_local_conversation, list_goals
 from zhiyu.core.tools.registry import default_registry
@@ -130,6 +132,29 @@ def _parser() -> argparse.ArgumentParser:
     character_delete = character_sub.add_parser("delete", help="删除角色")
     character_delete.add_argument("id")
 
+    memory = sub.add_parser("memory", help="管理本地用户记忆")
+    memory_sub = memory.add_subparsers(dest="memory_command", required=True)
+    memory_list = memory_sub.add_parser("list", help="列出记忆")
+    memory_list.add_argument("--all", action="store_true", dest="include_inactive")
+    memory_search = memory_sub.add_parser("search", help="搜索记忆")
+    memory_search.add_argument("query")
+    memory_search.add_argument("--all", action="store_true", dest="include_inactive")
+    memory_show = memory_sub.add_parser("show", help="查看记忆详情")
+    memory_show.add_argument("id")
+    memory_add = memory_sub.add_parser("add", help="手动添加记忆")
+    memory_add.add_argument("--type", required=True)
+    memory_add.add_argument("--content", required=True)
+    memory_edit = memory_sub.add_parser("edit", help="纠正记忆")
+    memory_edit.add_argument("id")
+    memory_edit.add_argument("--content", required=True)
+    memory_complete = memory_sub.add_parser("complete", help="完成目标或项目")
+    memory_complete.add_argument("id")
+    memory_forget = memory_sub.add_parser("forget", help="删除记忆")
+    memory_forget.add_argument("id")
+    memory_sub.add_parser("status", help="显示后台提取任务状态")
+    memory_sub.add_parser("sync", help="处理待执行的提取任务")
+    memory_sub.add_parser("retry", help="重试失败的提取任务")
+
     qq = sub.add_parser("qq", help="管理 QQ OneBot 渠道")
     qq_sub = qq.add_subparsers(dest="qq_command", required=True)
     qq_configure = qq_sub.add_parser("configure", help="配置反向 WebSocket")
@@ -229,7 +254,7 @@ def _entry_state(args) -> tuple[str | None, str | None, list[str]]:
     with SessionLocal() as db:
         identity_id = IdentityRepository().local(db).id
         if conversation_id is None:
-            last = last_local_conversation(db)
+            last = last_local_conversation(db, identity_id)
             if last is not None:
                 conversation_id = last.id
                 continuing_title = last.title
@@ -252,7 +277,9 @@ def _chat_tui(args) -> None:
 
 async def _chat_line(args) -> None:
     service = ChatService()
+    service.memory_processor.kick()
     characters = CharacterService()
+    memories = MemoryService()
     if args.message:
         await _send(
             service,
@@ -287,7 +314,7 @@ async def _chat_line(args) -> None:
         if text == "/exit":
             return
         if text == "/help":
-            print("/new /history /model [name] /character [id] /verbose [on|full|off] /tools /clear /exit")
+            print("/new /history /model [name] /character [id] /memory /remember <type> <content> /forget <id> /verbose [on|full|off] /tools /clear /exit")
             continue
         if text == "/new":
             conversation_id = None
@@ -310,6 +337,22 @@ async def _chat_line(args) -> None:
         if text.startswith("/character "):
             _set_character(characters, conversation_id, text.removeprefix("/character ").strip())
             print("角色已切换")
+            continue
+        if text == "/memory":
+            _print_memories(memories.list())
+            continue
+        if text.startswith("/remember "):
+            parts = text.removeprefix("/remember ").strip().split(maxsplit=1)
+            if len(parts) != 2:
+                print("用法：/remember <type> <content>", file=sys.stderr)
+            else:
+                item = memories.add(type=parts[0], content=parts[1])
+                print(f"已记住 {item.content} [{item.id}]")
+            continue
+        if text.startswith("/forget "):
+            memory_id = text.removeprefix("/forget ").strip()
+            memories.forget(memory_id)
+            print(f"已删除记忆 {memory_id}；历史聊天未删除")
             continue
         if text == "/tools":
             for tool in tool_registry.all():
@@ -345,6 +388,8 @@ async def _chat_line(args) -> None:
 
 
 async def _qq_listen(service: ChannelService) -> None:
+    memory_processor = MemoryJobProcessor()
+    memory_processor.kick()
     endpoint = await service.start_qq()
     print(f"正在监听 {endpoint}，等待 NapCat 连接。按 Ctrl+C 停止。")
     previous = None
@@ -404,6 +449,71 @@ def _character(args) -> None:
     elif args.character_command == "delete":
         service.delete(args.id)
         print(f"已删除 {args.id}")
+
+
+def _print_memories(items) -> None:
+    if not items:
+        print("尚无记忆")
+        return
+    for item in items:
+        print(f"[{item.id}] {item.type}/{item.status} {item.content}")
+
+
+def _memory(args) -> None:
+    service = MemoryService()
+    if args.memory_command == "list":
+        _print_memories(service.list(include_inactive=args.include_inactive))
+    elif args.memory_command == "search":
+        _print_memories(
+            service.search(args.query, include_inactive=args.include_inactive)
+        )
+    elif args.memory_command == "show":
+        item = service.get(args.id)
+        if item is None:
+            raise ValueError("记忆不存在")
+        print(f"ID：{item.id}")
+        print(f"类型：{item.type}")
+        print(f"状态：{item.status}")
+        print(f"来源：{item.origin}")
+        print(f"内容：{item.content}")
+        if item.supersedes_id:
+            print(f"替换：{item.supersedes_id}")
+        if item.source_message_id:
+            print(f"来源消息：{item.source_message_id}")
+            if item.source_content is None:
+                print("来源内容：已删除")
+            else:
+                print(f"来源内容：{item.source_content}")
+                print(f"来源会话：{item.source_conversation_id}")
+    elif args.memory_command == "add":
+        item = service.add(type=args.type, content=args.content)
+        print(f"已添加记忆 {item.id}")
+    elif args.memory_command == "edit":
+        item = service.edit(args.id, content=args.content)
+        print(f"已纠正记忆，新 ID：{item.id}")
+    elif args.memory_command == "complete":
+        service.complete(args.id)
+        print(f"已完成 {args.id}")
+    elif args.memory_command == "forget":
+        service.forget(args.id)
+        print(f"已删除记忆 {args.id}；历史聊天未删除")
+    elif args.memory_command == "status":
+        counts = MemoryJobProcessor().status()
+        if not counts:
+            print("暂无记忆提取任务")
+        else:
+            print(" ".join(f"{status}={count}" for status, count in sorted(counts.items())))
+    elif args.memory_command == "sync":
+        result = asyncio.run(MemoryJobProcessor().process_pending(recover=True))
+        print(" ".join(f"{status}={count}" for status, count in sorted(result.items())))
+    elif args.memory_command == "retry":
+        processor = MemoryJobProcessor()
+        reset = processor.retry_failed()
+        result = asyncio.run(processor.process_pending(recover=True))
+        print(
+            f"reset={reset} "
+            + " ".join(f"{status}={count}" for status, count in sorted(result.items()))
+        )
 
 
 def _provider(args) -> None:
@@ -491,6 +601,8 @@ def run(argv: list[str] | None = None) -> int:
                 asyncio.run(_chat_line(args))
         elif args.command == "character":
             _character(args)
+        elif args.command == "memory":
+            _memory(args)
         elif args.command == "provider":
             _provider(args)
         elif args.command == "qq":
