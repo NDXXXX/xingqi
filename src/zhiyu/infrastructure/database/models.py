@@ -123,6 +123,23 @@ class Memory(Base):
         ForeignKey("memories.id", ondelete="SET NULL"), nullable=True
     )
     origin: Mapped[str] = mapped_column(String(32), default="automatic")
+    tier: Mapped[str] = mapped_column(String(16), default="core")
+    trust: Mapped[str] = mapped_column(String(16), default="agent")
+    source_kind: Mapped[str] = mapped_column(String(16), default="message")
+    observed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    supersession_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    trigger_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    promotion_status: Mapped[str] = mapped_column(String(16), default="none")
+    promoted_to_id: Mapped[str | None] = mapped_column(
+        ForeignKey("memories.id", ondelete="SET NULL"), nullable=True
+    )
+    conversation_id: Mapped[str | None] = mapped_column(
+        ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True
+    )
+    file_path: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    line_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    line_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -153,6 +170,49 @@ class MemoryJob(Base):
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class MemoryConsolidationRun(Base):
+    __tablename__ = "memory_consolidation_runs"
+    __table_args__ = (Index("ix_consolidation_identity_created", "identity_id", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    identity_id: Mapped[str] = mapped_column(
+        ForeignKey("identities.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(String(32), default="applied")
+    candidate_count: Mapped[int] = mapped_column(Integer, default=0)
+    promoted_count: Mapped[int] = mapped_column(Integer, default=0)
+    merged_count: Mapped[int] = mapped_column(Integer, default=0)
+    superseded_count: Mapped[int] = mapped_column(Integer, default=0)
+    skipped_count: Mapped[int] = mapped_column(Integer, default=0)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class MemoryEmbedding(Base):
+    __tablename__ = "memory_embeddings"
+    __table_args__ = (
+        UniqueConstraint("memory_id", "model", name="uq_memory_embedding_model"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    memory_id: Mapped[str] = mapped_column(
+        ForeignKey("memories.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    model: Mapped[str] = mapped_column(String(255))
+    vector_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ForgottenConversation(Base):
+    __tablename__ = "forgotten_conversations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(String(36), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class AppSetting(Base):

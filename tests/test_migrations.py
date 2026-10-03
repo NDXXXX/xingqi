@@ -53,7 +53,7 @@ def test_upgrade_preserves_legacy_data(tmp_path):
 
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT title FROM conversations WHERE id='c1'")) == "保留我"
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0008_memory_jobs"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0012_forgotten_conversations"
         assert connection.scalar(text("SELECT channel FROM conversations WHERE id='c1'")) == "local"
         memory = connection.execute(text(
             "SELECT content, status, origin FROM memories WHERE id='m1'"
@@ -64,6 +64,9 @@ def test_upgrade_preserves_legacy_data(tmp_path):
     assert {"identities", "channel_configs", "mcp_server_configs", "memory_jobs"} <= tables
     assert {"created_at", "updated_at"} <= {column["name"] for column in inspect(engine).get_columns("providers")}
     assert {"status", "origin", "source_message_id", "supersedes_id"} <= {
+        column["name"] for column in inspect(engine).get_columns("memories")
+    }
+    assert {"tier", "trust", "source_kind", "observed_at", "file_path", "content_hash"} <= {
         column["name"] for column in inspect(engine).get_columns("memories")
     }
 

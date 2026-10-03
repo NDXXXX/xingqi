@@ -3,6 +3,7 @@
 import asyncio
 import logging
 
+from zhiyu.core.memory.deep_recall import is_forgotten
 from zhiyu.core.memory.manager import MemoryManager
 from zhiyu.core.providers.router import ProviderRouter, provider_router
 from zhiyu.infrastructure.database.db import SessionLocal
@@ -68,6 +69,9 @@ class MemoryJobProcessor:
             assistant = db.get(Message, job.assistant_message_id) if job.assistant_message_id else None
             provider_config = ProviderRepository().get(db, job.provider_id)
             if user is None:
+                self.jobs.finish(db, job, "cancelled")
+                return "cancelled"
+            if is_forgotten(db, user.conversation_id):
                 self.jobs.finish(db, job, "cancelled")
                 return "cancelled"
             messages = MessageRepository().list_by_conversation(db, user.conversation_id)

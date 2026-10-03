@@ -26,6 +26,7 @@ class Settings:
             or Path.home() / ".zhiyu"
         ).expanduser()
         self.database_path = self.data_dir / "companion.db"
+        self.memory_dir = self.data_dir / "memory"
         self.database_url = _env(
             "ZHIYU_DATABASE_URL",
             "DATABASE_URL",

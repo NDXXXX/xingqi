@@ -16,6 +16,7 @@ class MemoryRepository:
         *,
         include_shared: bool = True,
         statuses: tuple[str, ...] | None = ("active",),
+        tier: str | None = None,
     ) -> list[Memory]:
         if not identity_id:
             raise ValueError("读取记忆必须指定身份")
@@ -25,6 +26,8 @@ class MemoryRepository:
         query = select(Memory).where(condition)
         if statuses is not None:
             query = query.where(Memory.status.in_(statuses))
+        if tier is not None:
+            query = query.where(Memory.tier == tier)
         return list(db.scalars(query.order_by(Memory.updated_at.desc(), Memory.created_at.desc())))
 
     def list_owned(
@@ -33,8 +36,9 @@ class MemoryRepository:
         identity_id: str,
         *,
         statuses: tuple[str, ...] | None = ("active",),
+        tier: str | None = None,
     ) -> list[Memory]:
-        return self.list_visible(db, identity_id, include_shared=False, statuses=statuses)
+        return self.list_visible(db, identity_id, include_shared=False, statuses=statuses, tier=tier)
 
     def list(
         self,
@@ -82,6 +86,18 @@ class MemoryRepository:
         status_source_message_id: str | None = None,
         supersedes_id: str | None = None,
         origin: str = "automatic",
+        tier: str = "core",
+        trust: str = "agent",
+        source_kind: str = "message",
+        supersession_key: str | None = None,
+        trigger_text: str | None = None,
+        promotion_status: str = "none",
+        promoted_to_id: str | None = None,
+        conversation_id: str | None = None,
+        file_path: str | None = None,
+        line_start: int | None = None,
+        line_end: int | None = None,
+        content_hash: str | None = None,
     ) -> Memory:
         if not identity_id:
             raise ValueError("保存记忆必须指定身份")
@@ -98,6 +114,18 @@ class MemoryRepository:
             status_source_message_id=status_source_message_id,
             supersedes_id=supersedes_id,
             origin=origin,
+            tier=tier,
+            trust=trust,
+            source_kind=source_kind,
+            supersession_key=supersession_key,
+            trigger_text=trigger_text,
+            promotion_status=promotion_status,
+            promoted_to_id=promoted_to_id,
+            conversation_id=conversation_id,
+            file_path=file_path,
+            line_start=line_start,
+            line_end=line_end,
+            content_hash=content_hash,
         )
         db.add(memory)
         db.flush()

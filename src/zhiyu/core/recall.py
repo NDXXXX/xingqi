@@ -30,10 +30,10 @@ def last_local_conversation(
 
 
 def list_goals(db: Session, identity_id: str) -> list[str]:
-    """进行中的目标/项目（goal/project 记忆）。"""
+    """进行中的目标/项目（仅长期核心的 goal/project 记忆）。"""
     return [
         m.content
-        for m in MemoryRepository().list_visible(db, identity_id)
+        for m in MemoryRepository().list_visible(db, identity_id, tier="core")
         if m.type in ("goal", "project")
     ][:3]
 

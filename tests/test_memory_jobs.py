@@ -8,6 +8,7 @@ from sqlalchemy.pool import StaticPool
 
 from zhiyu.application.memories import MemoryService
 from zhiyu.application.memory_jobs import MemoryJobProcessor
+from zhiyu.core.memory.store import MemoryStore
 from zhiyu.core.providers.base import AIProvider, LLMResponse
 from zhiyu.infrastructure.database import models  # noqa: F401
 from zhiyu.infrastructure.database.db import Base
@@ -107,7 +108,7 @@ async def test_failed_job_stops_after_three_attempts_and_can_retry():
         assert job.attempts == 0
 
 
-def test_manual_edit_cancels_pending_jobs_for_identity():
+def test_manual_edit_cancels_pending_jobs_for_identity(tmp_path):
     factory, job_id, _user_id, identity_id = _queued_job()
     with factory() as db:
         memory = MemoryRepository().create(
@@ -116,7 +117,7 @@ def test_manual_edit_cancels_pending_jobs_for_identity():
         db.commit()
         memory_id = memory.id
 
-    MemoryService(factory).edit(memory_id, content="用户不喝咖啡")
+    MemoryService(factory, store=MemoryStore(tmp_path)).edit(memory_id, content="用户不喝咖啡")
 
     with factory() as db:
         assert MemoryJobRepository().get(db, job_id).status == "cancelled"

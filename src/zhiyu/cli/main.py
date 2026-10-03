@@ -13,6 +13,7 @@ from zhiyu.application.channels import ChannelService
 from zhiyu.application.characters import CharacterService
 from zhiyu.application.chat import ChatRequest, ChatService
 from zhiyu.application.doctor import run_checks
+from zhiyu.application.consolidation_jobs import ConsolidationProcessor
 from zhiyu.application.memories import MemoryService
 from zhiyu.application.memory_jobs import MemoryJobProcessor
 from zhiyu.application.providers import ProviderService
@@ -136,9 +137,11 @@ def _parser() -> argparse.ArgumentParser:
     memory_sub = memory.add_subparsers(dest="memory_command", required=True)
     memory_list = memory_sub.add_parser("list", help="列出记忆")
     memory_list.add_argument("--all", action="store_true", dest="include_inactive")
+    memory_list.add_argument("--tier", choices=["core", "episodic"], help="按层级过滤")
     memory_search = memory_sub.add_parser("search", help="搜索记忆")
     memory_search.add_argument("query")
     memory_search.add_argument("--all", action="store_true", dest="include_inactive")
+    memory_search.add_argument("--tier", choices=["core", "episodic"], help="按层级过滤")
     memory_show = memory_sub.add_parser("show", help="查看记忆详情")
     memory_show.add_argument("id")
     memory_add = memory_sub.add_parser("add", help="手动添加记忆")
@@ -150,10 +153,19 @@ def _parser() -> argparse.ArgumentParser:
     memory_complete = memory_sub.add_parser("complete", help="完成目标或项目")
     memory_complete.add_argument("id")
     memory_forget = memory_sub.add_parser("forget", help="删除记忆")
-    memory_forget.add_argument("id")
+    memory_forget.add_argument("id", nargs="?")
+    memory_forget.add_argument("--conversation", dest="conversation_id", help="遗忘某会话派生的记忆")
     memory_sub.add_parser("status", help="显示后台提取任务状态")
     memory_sub.add_parser("sync", help="处理待执行的提取任务")
     memory_sub.add_parser("retry", help="重试失败的提取任务")
+    memory_sub.add_parser("index", help="从记忆文件重建索引")
+    memory_sub.add_parser("export", help="导出记忆文件内容")
+    memory_consolidate = memory_sub.add_parser("consolidate", help="巩固情景观察为长期核心")
+    memory_consolidate.add_argument("--apply", action="store_true", help="实际应用（默认 dry-run）")
+    memory_consolidate.add_argument("--force", action="store_true", help="忽略阈值强制运行")
+    consolidation = memory_sub.add_parser("consolidation", help="查看巩固记录")
+    consolidation_sub = consolidation.add_subparsers(dest="consolidation_command", required=True)
+    consolidation_sub.add_parser("list", help="列出巩固记录")
 
     qq = sub.add_parser("qq", help="管理 QQ OneBot 渠道")
     qq_sub = qq.add_subparsers(dest="qq_command", required=True)
@@ -167,6 +179,18 @@ def _parser() -> argparse.ArgumentParser:
     database = sub.add_parser("db", help="数据库维护")
     database_sub = database.add_subparsers(dest="db_command", required=True)
     database_sub.add_parser("upgrade", help="执行数据库迁移")
+
+    dream = sub.add_parser("dream", help="运行后台记忆巩固守护")
+    dream.add_argument("--interval", type=int, default=3600, help="巩固间隔秒数")
+    dream.add_argument("--once", action="store_true", help="只运行一次后退出")
+
+    embedding = sub.add_parser("embedding", help="配置语义检索的 embedding 端点")
+    embedding_sub = embedding.add_subparsers(dest="embedding_command", required=True)
+    embedding_configure = embedding_sub.add_parser("configure", help="配置 embedding 端点")
+    embedding_configure.add_argument("--base-url", required=True)
+    embedding_configure.add_argument("--model", required=True)
+    embedding_configure.add_argument("--api-key-env", help="从环境变量读取 API Key")
+    embedding_sub.add_parser("status", help="显示 embedding 配置状态")
     return parser
 
 
@@ -456,16 +480,20 @@ def _print_memories(items) -> None:
         print("尚无记忆")
         return
     for item in items:
-        print(f"[{item.id}] {item.type}/{item.status} {item.content}")
+        print(f"[{item.id}] {item.tier}/{item.type}/{item.status} {item.content}")
 
 
 def _memory(args) -> None:
     service = MemoryService()
     if args.memory_command == "list":
-        _print_memories(service.list(include_inactive=args.include_inactive))
+        _print_memories(
+            service.list(include_inactive=args.include_inactive, tier=args.tier)
+        )
     elif args.memory_command == "search":
         _print_memories(
-            service.search(args.query, include_inactive=args.include_inactive)
+            service.search(
+                args.query, include_inactive=args.include_inactive, tier=args.tier
+            )
         )
     elif args.memory_command == "show":
         item = service.get(args.id)
@@ -473,6 +501,7 @@ def _memory(args) -> None:
             raise ValueError("记忆不存在")
         print(f"ID：{item.id}")
         print(f"类型：{item.type}")
+        print(f"层级：{item.tier}")
         print(f"状态：{item.status}")
         print(f"来源：{item.origin}")
         print(f"内容：{item.content}")
@@ -495,8 +524,42 @@ def _memory(args) -> None:
         service.complete(args.id)
         print(f"已完成 {args.id}")
     elif args.memory_command == "forget":
-        service.forget(args.id)
-        print(f"已删除记忆 {args.id}；历史聊天未删除")
+        if args.conversation_id:
+            count = service.forget_conversation(args.conversation_id)
+            print(f"已遗忘会话 {args.conversation_id}，删除情景观察 {count} 条")
+        elif args.id:
+            service.forget(args.id)
+            print(f"已删除记忆 {args.id}；历史聊天未删除")
+        else:
+            raise ValueError("需要指定记忆 ID 或 --conversation")
+    elif args.memory_command == "index":
+        from zhiyu.core.memory.indexer import rebuild_index
+        from zhiyu.core.memory.store import MemoryStore
+
+        store = MemoryStore()
+        with SessionLocal() as db:
+            stats = rebuild_index(db, store)
+        print(" ".join(f"{key}={value}" for key, value in sorted(stats.items())))
+    elif args.memory_command == "export":
+        from zhiyu.core.memory.store import MemoryStore
+
+        store = MemoryStore()
+        for path in store.list_memory_files():
+            if path.exists():
+                print(f"# {path.name}")
+                print(path.read_text(encoding="utf-8"))
+    elif args.memory_command == "consolidate":
+        result = asyncio.run(
+            ConsolidationProcessor().run_sweep(dry_run=not args.apply, force=args.force)
+        )
+        print(json.dumps(result, ensure_ascii=False))
+    elif args.memory_command == "consolidation":
+        if args.consolidation_command == "list":
+            runs = ConsolidationProcessor().list_runs()
+            if not runs:
+                print("尚无巩固记录")
+            for run in runs:
+                print(f"[{run.created_at:%Y-%m-%d %H:%M}] {run.status} {run.summary}")
     elif args.memory_command == "status":
         counts = MemoryJobProcessor().status()
         if not counts:
@@ -576,6 +639,49 @@ def _qq(args) -> None:
             print("\nQQ 监听已停止")
 
 
+def _embedding(args) -> None:
+    from zhiyu.core.providers.embedding import load_config, resolve_api_key, save_config
+    from zhiyu.infrastructure.config.keystore import keystore
+
+    if args.embedding_command == "status":
+        with SessionLocal() as db:
+            config = load_config(db)
+        if config is None:
+            print("embedding 未配置")
+        else:
+            key = "已配置" if resolve_api_key(config.api_key_ref) else "未配置（key 无效）"
+            print(f"base_url={config.base_url} model={config.model} api_key={key}")
+    elif args.embedding_command == "configure":
+        if args.api_key_env:
+            api_key_ref = f"env:{args.api_key_env}"
+        else:
+            if not sys.stdin.isatty():
+                raise ValueError("非交互环境请使用 --api-key-env")
+            api_key = getpass("API Key: ").strip()
+            if not api_key:
+                raise ValueError("API Key 不能为空")
+            keystore.set("embedding", api_key)
+            api_key_ref = "embedding"
+        with SessionLocal() as db:
+            save_config(
+                db,
+                base_url=args.base_url.rstrip("/"),
+                model=args.model,
+                api_key_ref=api_key_ref,
+            )
+        print("embedding 已配置")
+
+
+async def _dream(args) -> None:
+    processor = ConsolidationProcessor()
+    if args.once:
+        result = await processor.run_sweep(dry_run=False, force=True)
+        print(json.dumps(result, ensure_ascii=False))
+        return
+    print(f"记忆巩固守护启动，间隔 {args.interval} 秒。按 Ctrl+C 停止。")
+    await processor.run_forever(args.interval)
+
+
 def run(argv: list[str] | None = None) -> int:
     load_dotenv()
     parser = _parser()
@@ -607,6 +713,13 @@ def run(argv: list[str] | None = None) -> int:
             _provider(args)
         elif args.command == "qq":
             _qq(args)
+        elif args.command == "dream":
+            try:
+                asyncio.run(_dream(args))
+            except KeyboardInterrupt:
+                print("\n巩固守护已停止")
+        elif args.command == "embedding":
+            _embedding(args)
         return 0
     except KeyboardInterrupt:
         print("\n已取消", file=sys.stderr)

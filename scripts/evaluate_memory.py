@@ -1,4 +1,4 @@
-"""Run the fixed memory-extraction evaluation set against a configured provider."""
+"""Run the fixed observation-extraction evaluation set against a configured provider."""
 
 import argparse
 import asyncio
@@ -7,21 +7,13 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from zhiyu.core.memory.extractor import extract_operations
+from zhiyu.core.memory.extractor import extract_observations
 from zhiyu.core.providers.router import provider_router
 from zhiyu.infrastructure.database.db import SessionLocal
 from zhiyu.infrastructure.database.repositories.provider_repository import ProviderRepository
 
 
-CASES = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "memory_extraction_cases.json"
-
-
-def _signature(operation: dict) -> tuple[str, str, str]:
-    return (
-        operation.get("action", ""),
-        operation.get("type", ""),
-        operation.get("target_id", ""),
-    )
+CASES = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "memory_observation_cases.json"
 
 
 async def evaluate(
@@ -51,43 +43,24 @@ async def evaluate(
     false_writes = 0
     details = []
     for case in cases:
-        raw_actual = await extract_operations(
+        actual = await extract_observations(
             client,
             model,
             user_message=case["user"],
             assistant_message=case["assistant"],
             history=case.get("history", []),
-            memories=case.get("memories", []),
         )
-        actual = [
-            operation
-            for operation in raw_actual
-            if not (
-                operation.get("action") == "add"
-                and any(
-                    old.get("type") == operation.get("type")
-                    and old.get("content", "").strip() == operation.get("content", "").strip()
-                    for old in case.get("memories", [])
-                )
-            )
-        ]
-        expected_signatures = sorted(_signature(item) for item in case["expected"])
-        actual_signatures = sorted(_signature(item) for item in actual)
-        forbidden = case.get("forbidden_terms", [])
+        expected_types = sorted(item["type"] for item in case["expected"])
+        actual_types = sorted(observation["type"] for observation in actual)
         forbidden_found = [
             term
-            for term in forbidden
-            if any(term in operation.get("content", "") for operation in actual)
+            for term in case.get("forbidden_terms", [])
+            if any(term in observation["content"] for observation in actual)
         ]
-        if case.get("allow_multiple"):
-            signatures_match = bool(actual_signatures) and set(actual_signatures) == set(
-                expected_signatures
-            )
-        else:
-            signatures_match = actual_signatures == expected_signatures
-        if case.get("optional_write") and not actual_signatures:
-            signatures_match = True
-        ok = signatures_match and not forbidden_found
+        types_match = actual_types == expected_types
+        if case.get("optional_write") and not actual:
+            types_match = True
+        ok = types_match and not forbidden_found
         passed += int(ok)
         if not case["expected"] and actual:
             false_writes += 1
@@ -95,10 +68,8 @@ async def evaluate(
             {
                 "id": case["id"],
                 "passed": ok,
-                "expected": expected_signatures,
-                "actual": actual_signatures,
-                "actual_operations": actual,
-                "raw_operations": raw_actual,
+                "expected_types": expected_types,
+                "actual": actual,
                 "forbidden_found": forbidden_found,
             }
         )
