@@ -4,6 +4,7 @@ import asyncio
 import logging
 
 from zhiyu.core.memory.deep_recall import is_forgotten
+from zhiyu.core.memory.indexer import rebuild_index
 from zhiyu.core.memory.manager import MemoryManager
 from zhiyu.core.providers.router import ProviderRouter, provider_router
 from zhiyu.infrastructure.database.db import SessionLocal
@@ -58,6 +59,15 @@ class MemoryJobProcessor:
                 seen.add(job_id)
                 status = await self._process_one(job_id)
                 result[status] = result.get(status, 0) + 1
+        if result["completed"]:
+            try:
+                from zhiyu.application.consolidation_jobs import ConsolidationProcessor
+
+                await ConsolidationProcessor(
+                    self.session_factory, self.memory_manager.store
+                ).run_due(dry_run=False)
+            except Exception as exc:
+                logger.warning("memory consolidation scheduling failed: %s", exc)
         return result
 
     async def _process_one(self, job_id: str) -> str:
@@ -71,7 +81,7 @@ class MemoryJobProcessor:
             if user is None:
                 self.jobs.finish(db, job, "cancelled")
                 return "cancelled"
-            if is_forgotten(db, user.conversation_id):
+            if is_forgotten(db, user.conversation_id, job.identity_id):
                 self.jobs.finish(db, job, "cancelled")
                 return "cancelled"
             messages = MessageRepository().list_by_conversation(db, user.conversation_id)
@@ -102,6 +112,10 @@ class MemoryJobProcessor:
             if not client.api_key:
                 raise ValueError("任务对应的 Provider 凭据不可用")
             with self.session_factory() as db:
+                if isinstance(self.memory_manager, MemoryManager):
+                    rebuild_index(
+                        db, self.memory_manager.store, data["identity_id"]
+                    )
                 if not self.memories.has_source_action(
                     db, data["identity_id"], data["user_message_id"]
                 ):

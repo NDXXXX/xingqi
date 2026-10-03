@@ -140,6 +140,7 @@ class Memory(Base):
     line_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
     line_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
     content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    entry_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -209,10 +210,93 @@ class MemoryEmbedding(Base):
 
 class ForgottenConversation(Base):
     __tablename__ = "forgotten_conversations"
+    __table_args__ = (
+        UniqueConstraint(
+            "identity_id", "conversation_id", name="uq_forgotten_conversation_identity"
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    conversation_id: Mapped[str] = mapped_column(String(36), unique=True, index=True)
+    identity_id: Mapped[str] = mapped_column(
+        ForeignKey("identities.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    conversation_id: Mapped[str] = mapped_column(String(36), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class MemorySource(Base):
+    __tablename__ = "memory_sources"
+    __table_args__ = (
+        UniqueConstraint(
+            "memory_id",
+            "source_memory_id",
+            "source_message_id",
+            name="uq_memory_source_lineage",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    memory_id: Mapped[str] = mapped_column(
+        ForeignKey("memories.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    identity_id: Mapped[str] = mapped_column(
+        ForeignKey("identities.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    source_memory_id: Mapped[str | None] = mapped_column(
+        ForeignKey("memories.id", ondelete="SET NULL"), nullable=True
+    )
+    source_message_id: Mapped[str | None] = mapped_column(
+        ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
+    )
+    conversation_id: Mapped[str | None] = mapped_column(
+        ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    trust: Mapped[str] = mapped_column(String(16), default="agent")
+    source_kind: Mapped[str] = mapped_column(String(32), default="message")
+    observed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class MemoryRecallEvent(Base):
+    __tablename__ = "memory_recall_events"
+    __table_args__ = (
+        Index("ix_memory_recall_identity_created", "identity_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    memory_id: Mapped[str] = mapped_column(
+        ForeignKey("memories.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    identity_id: Mapped[str] = mapped_column(
+        ForeignKey("identities.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    query_hash: Mapped[str] = mapped_column(String(64))
+    score: Mapped[float] = mapped_column(Float)
+    recall_mode: Mapped[str] = mapped_column(String(16))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class MemoryMutation(Base):
+    __tablename__ = "memory_mutations"
+    __table_args__ = (
+        Index("ix_memory_mutation_status_created", "status", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    identity_id: Mapped[str] = mapped_column(
+        ForeignKey("identities.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    operation: Mapped[str] = mapped_column(String(16))
+    relative_path: Mapped[str] = mapped_column(String(500))
+    entry_key: Mapped[str] = mapped_column(String(64))
+    expected_file_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    new_entry_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    new_entry_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="prepared")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
 class AppSetting(Base):

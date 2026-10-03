@@ -98,6 +98,7 @@ class MemoryRepository:
         line_start: int | None = None,
         line_end: int | None = None,
         content_hash: str | None = None,
+        entry_key: str | None = None,
     ) -> Memory:
         if not identity_id:
             raise ValueError("保存记忆必须指定身份")
@@ -126,6 +127,7 @@ class MemoryRepository:
             line_start=line_start,
             line_end=line_end,
             content_hash=content_hash,
+            entry_key=entry_key,
         )
         db.add(memory)
         db.flush()

@@ -1,12 +1,13 @@
-"""文件权威的记忆存储：内容存 Markdown 文件，行级可寻址，支持原子写与乐观并发。
+"""文件权威的记忆存储：按身份隔离 Markdown，使用稳定 entry id 寻址。
 
 文件布局（``settings.memory_dir`` 下）：
-- ``USER.md``   用户模型（profile / preference）
-- ``MEMORY.md`` 长期核心（fact / relationship / project / goal）
-- ``YYYY-MM-DD.md`` 情景日记（每日观察）
-- ``DREAMS.md`` 巩固审查日志
+- ``identities/<identity_id>/USER.md`` 用户模型（profile / preference）
+- ``identities/<identity_id>/MEMORY.md`` 长期核心
+- ``identities/<identity_id>/daily/YYYY-MM-DD.md`` 情景观察
+- ``identities/<identity_id>/DREAMS.md`` 巩固审查日志
 
-每行一条记忆，元数据用行尾 HTML 注释承载：``- 内容 <!-- type=..., importance=... -->``。
+每行一条记忆，元数据用行尾 HTML 注释承载。``id`` 只负责稳定寻址，
+身份、可信等级和来源仍由数据库确定，不能从 Markdown 注释提升权限。
 """
 
 from __future__ import annotations
@@ -18,6 +19,8 @@ import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from filelock import FileLock
 
@@ -31,6 +34,10 @@ DREAMS_FILE = "DREAMS.md"
 _USER_TYPES = ("profile", "preference")
 
 _META_RE = re.compile(r"\s*<!--\s*(.*?)\s*-->\s*$")
+_BULLET_RE = re.compile(r"^\s*[-*]\s+(.+)$")
+_IDENTITY_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+_LOCAL_TZ = ZoneInfo("Asia/Shanghai")
+_LOCK_TIMEOUT_SECONDS = 5.0
 
 
 def normalize(content: str) -> str:
@@ -57,6 +64,10 @@ class Entry:
     def hash(self) -> str:
         return content_hash(self.content)
 
+    @property
+    def id(self) -> str | None:
+        return self.meta.get("id")
+
 
 def _parse_meta(text: str) -> dict[str, str]:
     meta: dict[str, str] = {}
@@ -78,8 +89,11 @@ def _format_line(content: str, meta: dict[str, str]) -> str:
 
 
 def parse_line(line: str, line_no: int) -> Entry | None:
-    """把单行解析为 Entry；空行或无法识别的行返回 None。"""
-    body = re.sub(r"^\s*[-*]\s+", "", line, count=1)
+    """把 Markdown bullet 解析为 Entry；标题和普通段落不会成为记忆。"""
+    bullet = _BULLET_RE.match(line)
+    if bullet is None:
+        return None
+    body = bullet.group(1)
     match = _META_RE.search(body)
     if match:
         content = normalize(body[: match.start()])
@@ -97,33 +111,103 @@ class MemoryStore:
 
     def __init__(self, memory_dir: Path | None = None) -> None:
         self.dir = memory_dir or settings.memory_dir
-        self.lock = FileLock(str(self.dir / ".memory.lock"))
+
+    def _lock_for(self, path: Path) -> FileLock:
+        return FileLock(
+            str(path.parent / f".{path.name}.lock"),
+            timeout=_LOCK_TIMEOUT_SECONDS,
+        )
 
     def ensure_dir(self) -> None:
         self.dir.mkdir(parents=True, exist_ok=True)
 
     @property
     def user_path(self) -> Path:
+        """兼容无身份的离线测试/导入；产品写入必须传 identity_id。"""
         return self.dir / USER_FILE
 
     @property
     def core_path(self) -> Path:
         return self.dir / CORE_FILE
 
-    def daily_path(self, when: datetime | None = None) -> Path:
-        return self.dir / f"{(when or datetime.now(timezone.utc)).strftime('%Y-%m-%d')}.md"
+    def vault_dir(self, identity_id: str) -> Path:
+        if not identity_id or not _IDENTITY_RE.fullmatch(identity_id):
+            raise ValueError("无效的记忆身份")
+        identities = (self.dir / "identities").resolve()
+        vault = (identities / identity_id).resolve()
+        if vault.parent != identities:
+            raise ValueError("无效的记忆身份")
+        return vault
 
-    def path_for(self, memory_type: str) -> Path:
+    def user_path_for(self, identity_id: str) -> Path:
+        return self.vault_dir(identity_id) / USER_FILE
+
+    def core_path_for(self, identity_id: str) -> Path:
+        return self.vault_dir(identity_id) / CORE_FILE
+
+    def dreams_path(self, identity_id: str) -> Path:
+        return self.vault_dir(identity_id) / DREAMS_FILE
+
+    def daily_path(self, when: datetime | None = None, identity_id: str | None = None) -> Path:
+        if when is None:
+            current = datetime.now(_LOCAL_TZ)
+        elif when.tzinfo is None:
+            current = when.replace(tzinfo=timezone.utc).astimezone(_LOCAL_TZ)
+        else:
+            current = when.astimezone(_LOCAL_TZ)
+        root = self.vault_dir(identity_id) / "daily" if identity_id else self.dir
+        return root / f"{current.strftime('%Y-%m-%d')}.md"
+
+    def path_for(self, memory_type: str, identity_id: str | None = None) -> Path:
+        if identity_id:
+            return (
+                self.user_path_for(identity_id)
+                if memory_type in _USER_TYPES
+                else self.core_path_for(identity_id)
+            )
         return self.user_path if memory_type in _USER_TYPES else self.core_path
 
-    def list_memory_files(self) -> list[Path]:
-        """返回参与记忆的 Markdown 文件（USER、MEMORY 与所有日记，排除 DREAMS）。"""
+    def relative_path(self, path: Path) -> str:
+        resolved = path.resolve()
+        root = self.dir.resolve()
+        if not resolved.is_relative_to(root):
+            raise ValueError("记忆文件必须位于 memory_dir 内")
+        return resolved.relative_to(root).as_posix()
+
+    def resolve_relative(self, relative_path: str) -> Path:
+        path = (self.dir / relative_path).resolve()
+        if not path.is_relative_to(self.dir.resolve()):
+            raise ValueError("记忆文件路径越界")
+        return path
+
+    def list_memory_files(self, identity_id: str | None = None) -> list[Path]:
+        """只返回受管的 USER、MEMORY 和 daily 文件。"""
+        if identity_id:
+            vault = self.vault_dir(identity_id)
+            files = [self.user_path_for(identity_id), self.core_path_for(identity_id)]
+            daily = vault / "daily"
+            if daily.exists():
+                files.extend(sorted(daily.glob("????-??-??.md")))
+            return files
         files = [self.user_path, self.core_path]
         if self.dir.exists():
-            for path in sorted(self.dir.glob("*.md")):
-                if path.name not in (USER_FILE, CORE_FILE, DREAMS_FILE):
-                    files.append(path)
+            files.extend(sorted(self.dir.glob("????-??-??.md")))
         return files
+
+    def is_managed_path(self, identity_id: str, path: Path) -> bool:
+        """路径是否是该身份可被索引的正文文件（明确排除 DREAMS）。"""
+        resolved = path.resolve()
+        vault = self.vault_dir(identity_id).resolve()
+        if not resolved.is_relative_to(vault):
+            return False
+        relative = resolved.relative_to(vault)
+        if relative.as_posix() in (USER_FILE, CORE_FILE):
+            return True
+        return (
+            len(relative.parts) == 2
+            and relative.parts[0] == "daily"
+            and re.fullmatch(r"\d{4}-\d{2}-\d{2}\.md", relative.parts[1]) is not None
+        )
 
     def read_entries(self, path: Path) -> list[Entry]:
         if not path.exists():
@@ -136,22 +220,35 @@ class MemoryStore:
                 entries.append(entry)
         return entries
 
-    def append(self, path: Path, content: str, meta: dict[str, str] | None = None) -> Entry:
-        with self.lock:
+    def append(
+        self,
+        path: Path,
+        content: str,
+        meta: dict[str, str] | None = None,
+        *,
+        expected_file_hash: str | None = None,
+    ) -> Entry:
+        metadata = dict(meta or {})
+        metadata.setdefault("id", str(uuid4()))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock_for(path):
             self.ensure_dir()
+            current = path.read_text(encoding="utf-8") if path.exists() else ""
+            if expected_file_hash is not None and file_hash(current) != expected_file_hash:
+                raise RuntimeError("记忆文件已被并发修改")
             entries = self.read_entries(path)
             next_line = max((entry.line_end for entry in entries), default=0) + 1
-            line = _format_line(content, meta or {})
+            line = _format_line(content, metadata)
             self._append_line(path, line)
             return Entry(
                 content=normalize(content),
-                meta=meta or {},
+                meta=metadata,
                 line_start=next_line,
                 line_end=next_line,
             )
 
     def remove(self, path: Path, index: int) -> None:
-        with self.lock:
+        with self._lock_for(path):
             entries = self.read_entries(path)
             if not (0 <= index < len(entries)):
                 raise IndexError("记忆条目不在文件中")
@@ -164,12 +261,73 @@ class MemoryStore:
                 return index
         return None
 
+    def index_by_id(self, path: Path, entry_id: str) -> int | None:
+        for index, entry in enumerate(self.read_entries(path)):
+            if entry.id == entry_id:
+                return index
+        return None
+
+    def remove_by_id(
+        self,
+        path: Path,
+        entry_id: str,
+        *,
+        expected_file_hash: str | None = None,
+    ) -> bool:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock_for(path):
+            current = path.read_text(encoding="utf-8") if path.exists() else ""
+            if expected_file_hash is not None and file_hash(current) != expected_file_hash:
+                raise RuntimeError("记忆文件已被并发修改")
+            entries = self.read_entries(path)
+            index = next((i for i, entry in enumerate(entries) if entry.id == entry_id), None)
+            if index is None:
+                return False
+            del entries[index]
+            self._write_entries(path, entries)
+            return True
+
+    def replace_by_id(
+        self,
+        path: Path,
+        entry_id: str,
+        content: str,
+        meta: dict[str, str],
+        *,
+        expected_file_hash: str | None = None,
+    ) -> Entry:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock_for(path):
+            current = path.read_text(encoding="utf-8") if path.exists() else ""
+            if expected_file_hash is not None and file_hash(current) != expected_file_hash:
+                raise RuntimeError("记忆文件已被并发修改")
+            entries = self.read_entries(path)
+            index = next((i for i, entry in enumerate(entries) if entry.id == entry_id), None)
+            if index is None:
+                raise ValueError("记忆条目不在文件中")
+            replacement = Entry(
+                content=normalize(content),
+                meta=dict(meta),
+                line_start=entries[index].line_start,
+                line_end=entries[index].line_end,
+            )
+            entries[index] = replacement
+            self._write_entries(path, entries)
+            return replacement
+
     def remove_by_hash(self, path: Path, target_hash: str) -> bool:
-        index = self.index_by_hash(path, target_hash)
-        if index is None:
-            return False
-        self.remove(path, index)
-        return True
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock_for(path):
+            entries = self.read_entries(path)
+            index = next(
+                (i for i, entry in enumerate(entries) if entry.hash == target_hash),
+                None,
+            )
+            if index is None:
+                return False
+            del entries[index]
+            self._write_entries(path, entries)
+            return True
 
     def _write_entries(self, path: Path, entries: list[Entry]) -> None:
         text = "".join(_format_line(entry.content, entry.meta) + "\n" for entry in entries)

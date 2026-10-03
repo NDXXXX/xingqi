@@ -96,7 +96,8 @@ async def test_observation_without_user_evidence_is_ignored(tmp_path):
 
 def test_memory_service_edit_complete_and_forget(tmp_path):
     factory = _database()
-    service = MemoryService(factory, store=MemoryStore(tmp_path))
+    store = MemoryStore(tmp_path)
+    service = MemoryService(factory, store=store)
     old = service.add(type="preference", content="用户喜欢咖啡")
     corrected = service.edit(old.id, content="用户不喝咖啡")
 
@@ -104,7 +105,9 @@ def test_memory_service_edit_complete_and_forget(tmp_path):
     assert corrected.supersedes_id == old.id
     assert [item.content for item in service.list()] == ["用户不喝咖啡"]
 
-    user_text = (tmp_path / "USER.md").read_text(encoding="utf-8")
+    with factory() as db:
+        identity_id = IdentityRepository().local(db).id
+    user_text = store.user_path_for(identity_id).read_text(encoding="utf-8")
     assert "用户喜欢咖啡" not in user_text
     assert "用户不喝咖啡" in user_text
 
@@ -119,13 +122,47 @@ def test_memory_service_edit_complete_and_forget(tmp_path):
 
 def test_memory_service_add_routes_core_types_to_files(tmp_path):
     factory = _database()
-    service = MemoryService(factory, store=MemoryStore(tmp_path))
+    store = MemoryStore(tmp_path)
+    service = MemoryService(factory, store=store)
     service.add(type="preference", content="回答时优先给结论")
     service.add(type="fact", content="用户住在北京")
 
-    assert "回答时优先给结论" in (tmp_path / "USER.md").read_text(encoding="utf-8")
-    assert "用户住在北京" in (tmp_path / "MEMORY.md").read_text(encoding="utf-8")
+    with factory() as db:
+        identity_id = IdentityRepository().local(db).id
+    assert "回答时优先给结论" in store.user_path_for(identity_id).read_text(
+        encoding="utf-8"
+    )
+    assert "用户住在北京" in store.core_path_for(identity_id).read_text(
+        encoding="utf-8"
+    )
     assert [item.tier for item in service.list()] == ["core", "core"]
+
+
+def test_forget_plan_is_read_only(tmp_path):
+    factory = _database()
+    service = MemoryService(factory, store=MemoryStore(tmp_path))
+    memory = service.add(type="fact", content="仅用于预览删除")
+
+    plan = service.plan_forget(memory_id=memory.id)
+
+    assert plan["entries"][0]["action"] == "delete"
+    assert service.get(memory.id) is not None
+
+
+def test_memory_list_indexes_external_markdown_edit(tmp_path):
+    factory = _database()
+    store = MemoryStore(tmp_path)
+    with factory() as db:
+        identity_id = IdentityRepository().local(db).id
+    store.append(
+        store.core_path_for(identity_id),
+        "用户手工写入 Markdown 的事实",
+        meta={"type": "fact"},
+    )
+
+    items = MemoryService(factory, store=store).list()
+
+    assert [item.content for item in items] == ["用户手工写入 Markdown 的事实"]
 
 
 def test_memory_repository_rejects_unscoped_list():

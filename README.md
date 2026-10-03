@@ -45,10 +45,13 @@ uv run zhiyu memory search "咖啡"
 uv run zhiyu memory add --type preference --content "用户喜欢简洁回答"
 uv run zhiyu memory edit <id> --content "用户喜欢详细解释"
 uv run zhiyu memory complete <id>
-uv run zhiyu memory forget <id>
+uv run zhiyu memory forget <id>             # 预览
+uv run zhiyu memory forget <id> --apply     # 执行
 uv run zhiyu memory status
 uv run zhiyu memory sync
 uv run zhiyu memory retry
+uv run zhiyu memory index
+uv run zhiyu memory recall-explain "接着做那个桌面助手"
 ```
 
 聊天结束后，长期记忆由持久化后台任务提取；单次 CLI 退出也不会丢失任务。常驻 TUI/QQ 会自动处理，`memory sync` 可手动恢复和执行待处理任务。
@@ -57,6 +60,7 @@ uv run zhiyu memory retry
 
 ```bash
 PYTHONPATH=src uv run python scripts/evaluate_memory.py --provider deepseek --model deepseek-chat
+PYTHONPATH=src uv run python scripts/evaluate_memory_retrieval.py
 ```
 
 非交互环境通过环境变量提供密钥：

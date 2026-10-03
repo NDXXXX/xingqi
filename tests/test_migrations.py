@@ -3,7 +3,7 @@
 from alembic import command
 from sqlalchemy import create_engine, inspect, text
 
-from zhiyu.infrastructure.database.migrations import migration_config
+from zhiyu.infrastructure.database.migrations import backup_database, migration_config
 
 
 def test_upgrade_preserves_legacy_data(tmp_path):
@@ -53,7 +53,7 @@ def test_upgrade_preserves_legacy_data(tmp_path):
 
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT title FROM conversations WHERE id='c1'")) == "保留我"
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0012_forgotten_conversations"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0013_memory_vaults"
         assert connection.scalar(text("SELECT channel FROM conversations WHERE id='c1'")) == "local"
         memory = connection.execute(text(
             "SELECT content, status, origin FROM memories WHERE id='m1'"
@@ -66,9 +66,10 @@ def test_upgrade_preserves_legacy_data(tmp_path):
     assert {"status", "origin", "source_message_id", "supersedes_id"} <= {
         column["name"] for column in inspect(engine).get_columns("memories")
     }
-    assert {"tier", "trust", "source_kind", "observed_at", "file_path", "content_hash"} <= {
+    assert {"tier", "trust", "source_kind", "observed_at", "file_path", "content_hash", "entry_key"} <= {
         column["name"] for column in inspect(engine).get_columns("memories")
     }
+    assert {"memory_sources", "memory_recall_events", "memory_mutations"} <= tables
 
 
 def test_reverse_upgrade_disables_old_qq_endpoint(tmp_path):
@@ -104,3 +105,54 @@ def test_memory_lifecycle_migration_can_round_trip(tmp_path):
     command.upgrade(config, "head")
     columns = {column["name"] for column in inspect(engine).get_columns("memories")}
     assert {"status", "origin", "source_message_id", "supersedes_id"} <= columns
+
+
+def test_identity_tombstones_downgrade_without_unique_conflict(tmp_path):
+    database = tmp_path / "tombstone-round-trip.db"
+    config = migration_config(f"sqlite:///{database}")
+    command.upgrade(config, "head")
+    engine = create_engine(f"sqlite:///{database}")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO identities "
+                "(id, channel, external_user_id, display_name, created_at, updated_at) "
+                "VALUES ('qq-identity', 'qq', '10001', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO forgotten_conversations "
+                "(id, identity_id, conversation_id, created_at) VALUES "
+                "('f-local', '00000000-0000-0000-0000-000000000001', 'same-conversation', CURRENT_TIMESTAMP), "
+                "('f-qq', 'qq-identity', 'same-conversation', CURRENT_TIMESTAMP)"
+            )
+        )
+
+    command.downgrade(config, "0012_forgotten_conversations")
+    with engine.connect() as connection:
+        assert connection.scalar(
+            text(
+                "SELECT COUNT(*) FROM forgotten_conversations "
+                "WHERE conversation_id='same-conversation'"
+            )
+        ) == 1
+
+
+def test_pre_migration_backup_contains_database_and_memory(tmp_path):
+    database = tmp_path / "source.db"
+    with create_engine(f"sqlite:///{database}").begin() as connection:
+        connection.execute(text("CREATE TABLE sample (value TEXT NOT NULL)"))
+        connection.execute(text("INSERT INTO sample VALUES ('before')"))
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    (memory_dir / "MEMORY.md").write_text("- before\n", encoding="utf-8")
+
+    backup = backup_database(
+        database, memory_dir, tmp_path / "backups", revision="0012"
+    )
+
+    with create_engine(f"sqlite:///{backup / 'source.db'}").connect() as connection:
+        assert connection.scalar(text("SELECT value FROM sample")) == "before"
+    assert (backup / "memory" / "MEMORY.md").read_text(encoding="utf-8") == "- before\n"
+    assert "0012" in (backup / "manifest.json").read_text(encoding="utf-8")

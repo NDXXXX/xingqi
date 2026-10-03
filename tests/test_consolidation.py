@@ -13,6 +13,7 @@ from zhiyu.core.memory.store import MemoryStore
 from zhiyu.core.providers.base import AIProvider, LLMResponse
 from zhiyu.infrastructure.database import models  # noqa: F401
 from zhiyu.infrastructure.database.db import Base
+from zhiyu.infrastructure.database.repositories.conversation_repository import ConversationRepository
 from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository
 from zhiyu.infrastructure.database.repositories.memory_repository import MemoryRepository
 from zhiyu.infrastructure.database.repositories.provider_repository import ProviderRepository
@@ -40,7 +41,7 @@ def _candidate(db, identity_id, type, content):
 
 
 def _core(db, store, identity_id, type, content):
-    path = store.path_for(type)
+    path = store.path_for(type, identity_id)
     entry = store.append(path, content, meta={"type": type})
     return MemoryRepository().create(
         db,
@@ -50,10 +51,11 @@ def _core(db, store, identity_id, type, content):
         tier="core",
         trust="agent",
         source_kind="consolidation",
-        file_path=path.name,
+        file_path=store.relative_path(path),
         line_start=entry.line_start,
         line_end=entry.line_end,
         content_hash=entry.hash,
+        entry_key=entry.id,
     )
 
 
@@ -109,7 +111,9 @@ def test_apply_promotes_candidates_to_core(tmp_path):
             fresh = MemoryRepository().get(db, candidate.id)
             assert fresh.promotion_status == "promoted"
             assert fresh.promoted_to_id == cores[0].id
-        assert "不向用户推荐咖啡" in (tmp_path / "USER.md").read_text(encoding="utf-8")
+        assert "不向用户推荐咖啡" in store.user_path_for(identity_id).read_text(
+            encoding="utf-8"
+        )
 
 
 def test_apply_supersedes_old_core(tmp_path):
@@ -139,7 +143,7 @@ def test_apply_supersedes_old_core(tmp_path):
 
         assert stats["superseded_count"] == 1
         assert MemoryRepository().get(db, old.id).status == "superseded"
-        text = (tmp_path / "USER.md").read_text(encoding="utf-8")
+        text = store.user_path_for(identity_id).read_text(encoding="utf-8")
         assert "用户喜欢咖啡" not in text
         assert "用户已戒咖啡" in text
 
@@ -203,14 +207,59 @@ def test_threshold_not_met_for_few_fresh_candidates():
     assert ConsolidationProcessor._threshold_met(candidates) is False
 
 
+def test_eligibility_requires_owner_recall_or_independent_repetition(tmp_path):
+    factory = _database()
+    store = MemoryStore(tmp_path)
+    processor = ConsolidationProcessor(factory, store)
+    with factory() as db:
+        identity_id = IdentityRepository().local(db).id
+        first_conversation = ConversationRepository().create(
+            db, title="first", channel="local", identity_id=identity_id
+        )
+        first = _candidate(db, identity_id, "preference", "用户不喝咖啡")
+        first.conversation_id = first_conversation.id
+        path = store.daily_path(identity_id=identity_id)
+        first_entry = store.append(path, first.content, meta={"type": first.type})
+        first.file_path = store.relative_path(path)
+        first.entry_key = first_entry.id
+        first.content_hash = first_entry.hash
+        db.commit()
+
+        assert processor._eligible(db, identity_id, [first]) == []
+
+        second_conversation = ConversationRepository().create(
+            db, title="second", channel="local", identity_id=identity_id
+        )
+        second = _candidate(db, identity_id, "preference", "用户不喝含咖啡因饮品")
+        second.conversation_id = second_conversation.id
+        second_entry = store.append(path, second.content, meta={"type": second.type})
+        second.file_path = store.relative_path(path)
+        second.entry_key = second_entry.id
+        second.content_hash = second_entry.hash
+        db.commit()
+
+        assert {item.id for item in processor._eligible(db, identity_id, [first, second])} == {
+            first.id,
+            second.id,
+        }
+
+
 def test_run_sweep_promotes_end_to_end(tmp_path, monkeypatch):
     factory = _database()
+    store = MemoryStore(tmp_path)
     with factory() as db:
         ProviderRepository().create(
             db, name="Fake", provider_type="openai", api_key_ref="env:FAKE_KEY"
         )
         identity_id = IdentityRepository().local(db).id
-        candidate_id = _candidate(db, identity_id, "preference", "下午不再喝咖啡").id
+        candidate = _candidate(db, identity_id, "preference", "下午不再喝咖啡")
+        path = store.daily_path(identity_id=identity_id)
+        entry = store.append(path, candidate.content, meta={"type": candidate.type})
+        candidate.trust = "owner"
+        candidate.file_path = store.relative_path(path)
+        candidate.entry_key = entry.id
+        candidate.content_hash = entry.hash
+        candidate_id = candidate.id
         db.commit()
 
     class FakeClient(AIProvider):
@@ -241,7 +290,6 @@ def test_run_sweep_promotes_end_to_end(tmp_path, monkeypatch):
         "zhiyu.application.consolidation_jobs.provider_router", FakeRouter()
     )
 
-    store = MemoryStore(tmp_path)
     result = asyncio.run(
         ConsolidationProcessor(factory, store).run_sweep(dry_run=False, force=True)
     )

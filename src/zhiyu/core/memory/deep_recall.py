@@ -14,7 +14,7 @@ from zhiyu.infrastructure.database.models import ForgottenConversation
 from zhiyu.infrastructure.database.repositories.conversation_repository import ConversationRepository
 from zhiyu.infrastructure.database.repositories.memory_repository import MemoryRepository
 from zhiyu.infrastructure.database.repositories.message_repository import MessageRepository
-from .retriever import _lexical_similarity, retrieve
+from .retriever import _lexical_similarity, build_query_plan, retrieve
 
 _RECALL_RE = re.compile(r"上次|之前|以前|记得|说过|聊过|提到|那天|上回|上一次|回忆|当时")
 
@@ -29,6 +29,7 @@ def deep_recall(
     query: str,
     *,
     exclude_conversation_id: str | None = None,
+    current_conversation_id: str | None = None,
 ) -> str | None:
     """返回可注入的历史片段；无命中返回 None。"""
     parts: list[str] = []
@@ -39,7 +40,13 @@ def deep_recall(
     if hits:
         parts.append("相关历史观察：\n" + "\n".join(f"- {item.content}" for item in hits))
 
-    history = _search_history(db, identity_id, query, exclude_conversation_id=exclude_conversation_id)
+    history = _search_history(
+        db,
+        identity_id,
+        query,
+        exclude_conversation_id=exclude_conversation_id,
+        current_conversation_id=current_conversation_id,
+    )
     if history:
         parts.append(history)
     return "\n\n".join(parts) if parts else None
@@ -51,10 +58,15 @@ def _search_history(
     query: str,
     *,
     exclude_conversation_id: str | None,
+    current_conversation_id: str | None = None,
     limit: int = 3,
 ) -> str | None:
     forgotten = set(
-        db.scalars(select(ForgottenConversation.conversation_id))
+        db.scalars(
+            select(ForgottenConversation.conversation_id).where(
+                ForgottenConversation.identity_id == identity_id
+            )
+        )
     )
     conversations = [
         item
@@ -63,25 +75,44 @@ def _search_history(
         and item.id != exclude_conversation_id
         and item.id not in forgotten
     ]
-    found: list[str] = []
+    plan = build_query_plan(query)
+    found: list[tuple[float, str]] = []
     for conversation in conversations[:10]:
-        for message in reversed(MessageRepository().list_by_conversation(db, conversation.id)):
+        messages = MessageRepository().list_by_conversation(db, conversation.id)
+        searchable_end = len(messages)
+        if conversation.id == current_conversation_id:
+            # 最近消息已在常规上下文里，只搜索可能被窗口裁掉的较早部分。
+            searchable_end = max(0, len(messages) - 8)
+        for index in range(searchable_end - 1, -1, -1):
+            message = messages[index]
             if message.role != "user":
                 continue
-            if query in message.content or _lexical_similarity(query, message.content) > 0.25:
-                found.append(message.content[:200])
-                if len(found) >= limit:
-                    break
-        if len(found) >= limit:
-            break
+            score = max(
+                (_lexical_similarity(variant, message.content) for variant in plan.variants),
+                default=0.0,
+            )
+            if query not in message.content and score <= 0.25:
+                continue
+            window = messages[max(0, index - 1) : min(len(messages), index + 2)]
+            excerpt = "\n".join(
+                f"  {item.role}: {item.content[:200]}" for item in window
+            )
+            date = message.created_at.strftime("%Y-%m-%d")
+            found.append((score, f"- [{date} 历史会话]\n{excerpt}"))
+    found.sort(key=lambda item: item[0], reverse=True)
     if found:
-        return "用户过去说过：\n" + "\n".join(f"- {text}" for text in found)
+        return "用户过去说过（含命中前后文）：\n" + "\n".join(
+            text for _, text in found[:limit]
+        )
     return None
 
 
-def is_forgotten(db: Session, conversation_id: str) -> bool:
-    return db.scalars(
-        select(ForgottenConversation.id).where(
-            ForgottenConversation.conversation_id == conversation_id
-        )
-    ).first() is not None
+def is_forgotten(
+    db: Session, conversation_id: str, identity_id: str | None = None
+) -> bool:
+    query = select(ForgottenConversation.id).where(
+        ForgottenConversation.conversation_id == conversation_id
+    )
+    if identity_id is not None:
+        query = query.where(ForgottenConversation.identity_id == identity_id)
+    return db.scalars(query).first() is not None

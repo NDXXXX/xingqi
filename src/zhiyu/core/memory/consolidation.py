@@ -3,21 +3,24 @@
 第一版是单次 sweep（合并 OpenClaw 的 light/REM/deep）：
 - 代码负责候选边界、信任门槛、结构校验、文件写入与生命周期；
 - 模型只负责在受约束的候选内产出 add_core / supersede_core / ignore。
-- 价值频率门槛（召回次数、多日语义复现）依赖 Phase 3 的召回事件与 embedding，本版暂缺。
+- 调度层在模型调用前校验召回次数、独立复现、owner 确认与正文版本。
 """
 
 from __future__ import annotations
 
 import json
 import re
+from uuid import uuid4
 from sqlalchemy.orm import Session
 
-from zhiyu.infrastructure.database.models import Memory
+from zhiyu.infrastructure.database.models import Memory, MemorySource
 from zhiyu.infrastructure.database.repositories.memory_repository import MemoryRepository
 from zhiyu.core.providers.base import AIProvider
 from zhiyu.core.providers.embedding import embed_and_store
 from .extractor import MEMORY_TYPES
-from .store import DREAMS_FILE, MemoryStore
+from .mutations import FileMutationManager
+from .retriever import derive_trigger_text
+from .store import MemoryStore
 
 CONSOLIDATION_ACTIONS = ("add_core", "supersede_core", "ignore")
 
@@ -135,6 +138,8 @@ def apply_consolidation(
 ) -> dict:
     """校验并应用巩固操作；任何结构/边界违规整批拒绝。"""
     repo = MemoryRepository()
+    mutations = FileMutationManager(store)
+    applied_mutations = []
     stats = {
         "candidate_count": 0,
         "promoted_count": 0,
@@ -171,8 +176,24 @@ def apply_consolidation(
 
         if operation["action"] == "supersede_core":
             target = targets[operation["target_id"]]
-            if target.content_hash:
-                store.remove_by_hash(store.path_for(target.type), target.content_hash)
+            if target.file_path and target.entry_key:
+                mutation = mutations.remove(
+                    db,
+                    identity_id,
+                    store.resolve_relative(target.file_path),
+                    target.entry_key,
+                    context={"lifecycle": "superseded"},
+                )
+                applied_mutations.append(mutation)
+            elif target.content_hash:
+                target_path = (
+                    store.resolve_relative(target.file_path)
+                    if target.file_path
+                    else store.path_for(target.type, identity_id)
+                )
+                store.remove_by_hash(
+                    target_path, target.content_hash
+                )
             repo.update(
                 db,
                 target,
@@ -184,13 +205,16 @@ def apply_consolidation(
             )
             stats["superseded_count"] += 1
 
-        core = _create_core(
-            db, repo, store, identity_id, operation, candidates
+        core, mutation = _create_core(
+            db, repo, store, mutations, identity_id, operation, candidates
         )
+        applied_mutations.append(mutation)
         stats["core_ids"].append(core.id)
         stats["promoted_count"] += 1
 
-    _append_dreams(db, store, identity_id, stats)
+    for mutation in applied_mutations:
+        mutations.complete(db, mutation)
+    _append_dreams(store, identity_id, stats)
     db.commit()
     return stats
 
@@ -234,10 +258,26 @@ def _load_targets(db, repo, identity_id, operations) -> dict[str, Memory] | None
     return result
 
 
-def _create_core(db, repo, store, identity_id, operation, candidates) -> Memory:
-    path = store.path_for(operation["type"])
+def _create_core(db, repo, store, mutations, identity_id, operation, candidates):
+    path = store.path_for(operation["type"], identity_id)
     meta = {"type": operation["type"], "importance": str(int(round(operation["importance"])))}
-    entry = store.append(path, operation["content"], meta=meta)
+    entry, mutation = mutations.append(
+        db,
+        identity_id,
+        path,
+        operation["content"],
+        meta=meta,
+        context={
+            "origin": "automatic",
+            "tier": "core",
+            "trust": "agent",
+            "source_kind": "consolidation",
+            "promotion_status": "none",
+            "importance": operation["importance"],
+            "source_memory_ids": list(operation["candidate_ids"]),
+            "supersedes_id": operation.get("target_id"),
+        },
+    )
     core = repo.create(
         db,
         type=operation["type"],
@@ -248,25 +288,41 @@ def _create_core(db, repo, store, identity_id, operation, candidates) -> Memory:
         tier="core",
         trust="agent",
         source_kind="consolidation",
-        file_path=path.name,
+        trigger_text=derive_trigger_text(entry.content),
+        file_path=store.relative_path(path),
         line_start=entry.line_start,
         line_end=entry.line_end,
         content_hash=entry.hash,
+        entry_key=entry.id,
     )
     embed_and_store(db, core.id, core.content)
     for candidate_id in operation["candidate_ids"]:
+        candidate = candidates[candidate_id]
         repo.update(
             db,
-            candidates[candidate_id],
+            candidate,
             promotion_status="promoted",
             promoted_to_id=core.id,
         )
-    return core
+        db.add(
+            MemorySource(
+                id=str(uuid4()),
+                memory_id=core.id,
+                identity_id=identity_id,
+                source_memory_id=candidate.id,
+                source_message_id=candidate.source_message_id,
+                conversation_id=candidate.conversation_id,
+                trust=candidate.trust,
+                source_kind="consolidation",
+                observed_at=candidate.observed_at,
+            )
+        )
+    return core, mutation
 
 
-def _append_dreams(db, store, identity_id, stats) -> None:
+def _append_dreams(store, identity_id, stats) -> None:
     summary = (
         f"候选 {stats['candidate_count']}：晋升 {stats['promoted_count']}，"
         f"替换 {stats['superseded_count']}，忽略 {stats['skipped_count']}"
     )
-    store.append(store.dir / DREAMS_FILE, summary, meta={"identity": identity_id})
+    store.append(store.dreams_path(identity_id), summary, meta={"identity": identity_id})

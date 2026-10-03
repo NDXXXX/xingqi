@@ -142,6 +142,10 @@ def _parser() -> argparse.ArgumentParser:
     memory_search.add_argument("query")
     memory_search.add_argument("--all", action="store_true", dest="include_inactive")
     memory_search.add_argument("--tier", choices=["core", "episodic"], help="按层级过滤")
+    memory_recall_explain = memory_sub.add_parser(
+        "recall-explain", help="解释一次记忆召回的候选、通道和排名"
+    )
+    memory_recall_explain.add_argument("query")
     memory_show = memory_sub.add_parser("show", help="查看记忆详情")
     memory_show.add_argument("id")
     memory_add = memory_sub.add_parser("add", help="手动添加记忆")
@@ -155,6 +159,7 @@ def _parser() -> argparse.ArgumentParser:
     memory_forget = memory_sub.add_parser("forget", help="删除记忆")
     memory_forget.add_argument("id", nargs="?")
     memory_forget.add_argument("--conversation", dest="conversation_id", help="遗忘某会话派生的记忆")
+    memory_forget.add_argument("--apply", action="store_true", help="实际执行（默认仅预览）")
     memory_sub.add_parser("status", help="显示后台提取任务状态")
     memory_sub.add_parser("sync", help="处理待执行的提取任务")
     memory_sub.add_parser("retry", help="重试失败的提取任务")
@@ -514,6 +519,8 @@ def _memory(args) -> None:
             else:
                 print(f"来源内容：{item.source_content}")
                 print(f"来源会话：{item.source_conversation_id}")
+    elif args.memory_command == "recall-explain":
+        print(json.dumps(service.recall_explain(args.query), ensure_ascii=False, indent=2))
     elif args.memory_command == "add":
         item = service.add(type=args.type, content=args.content)
         print(f"已添加记忆 {item.id}")
@@ -524,7 +531,13 @@ def _memory(args) -> None:
         service.complete(args.id)
         print(f"已完成 {args.id}")
     elif args.memory_command == "forget":
-        if args.conversation_id:
+        if not args.apply:
+            plan = service.plan_forget(
+                memory_id=args.id, conversation_id=args.conversation_id
+            )
+            print(json.dumps(plan, ensure_ascii=False, indent=2))
+            print("未修改数据；确认后加 --apply 执行")
+        elif args.conversation_id:
             count = service.forget_conversation(args.conversation_id)
             print(f"已遗忘会话 {args.conversation_id}，删除情景观察 {count} 条")
         elif args.id:
@@ -544,7 +557,9 @@ def _memory(args) -> None:
         from zhiyu.core.memory.store import MemoryStore
 
         store = MemoryStore()
-        for path in store.list_memory_files():
+        with SessionLocal() as db:
+            identity_id = IdentityRepository().local(db).id
+        for path in store.list_memory_files(identity_id):
             if path.exists():
                 print(f"# {path.name}")
                 print(path.read_text(encoding="utf-8"))
@@ -561,11 +576,8 @@ def _memory(args) -> None:
             for run in runs:
                 print(f"[{run.created_at:%Y-%m-%d %H:%M}] {run.status} {run.summary}")
     elif args.memory_command == "status":
-        counts = MemoryJobProcessor().status()
-        if not counts:
-            print("暂无记忆提取任务")
-        else:
-            print(" ".join(f"{status}={count}" for status, count in sorted(counts.items())))
+        status = service.status()
+        print(" ".join(f"{key}={value}" for key, value in sorted(status.items())))
     elif args.memory_command == "sync":
         result = asyncio.run(MemoryJobProcessor().process_pending(recover=True))
         print(" ".join(f"{status}={count}" for status, count in sorted(result.items())))

@@ -14,10 +14,18 @@ from uuid import uuid4
 from sqlalchemy import select
 
 from zhiyu.core.memory.consolidation import apply_consolidation, propose
+from zhiyu.core.memory.indexer import rebuild_index
+from zhiyu.core.memory.retriever import build_query_plan, _lexical_similarity
 from zhiyu.core.memory.store import MemoryStore
 from zhiyu.core.providers.router import provider_router
 from zhiyu.infrastructure.database.db import SessionLocal
-from zhiyu.infrastructure.database.models import MemoryConsolidationRun, utcnow
+from zhiyu.infrastructure.database.models import (
+    ForgottenConversation,
+    Memory,
+    MemoryConsolidationRun,
+    MemoryRecallEvent,
+    utcnow,
+)
 from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository
 from zhiyu.infrastructure.database.repositories.memory_repository import MemoryRepository
 from zhiyu.infrastructure.database.repositories.provider_repository import ProviderRepository
@@ -34,14 +42,28 @@ class ConsolidationProcessor:
         self.session_factory = session_factory
         self.store = store or MemoryStore()
 
-    async def run_sweep(self, *, dry_run: bool = True, force: bool = False) -> dict:
+    async def run_sweep(
+        self,
+        *,
+        identity_id: str | None = None,
+        dry_run: bool = True,
+        force: bool = False,
+    ) -> dict:
         with self.session_factory() as db:
-            identity_id = IdentityRepository().local(db).id
-            candidates = self._pending(db, identity_id)
-            if not candidates:
+            identity_id = identity_id or IdentityRepository().local(db).id
+            rebuild_index(db, self.store, identity_id)
+            pending = self._pending(db, identity_id)
+            if not pending:
                 return {"status": "skipped", "pending": 0}
-            if not force and not self._threshold_met(candidates):
-                return {"status": "skipped", "pending": len(candidates)}
+            if not force and not self._threshold_met(pending):
+                return {"status": "skipped", "pending": len(pending)}
+            candidates = self._eligible(db, identity_id, pending)
+            if not candidates:
+                return {
+                    "status": "skipped",
+                    "pending": len(pending),
+                    "eligible": 0,
+                }
             provider_config, model = self._default_provider_model(db)
             core = MemoryRepository().list_owned(db, identity_id, tier="core", statuses=("active",))
 
@@ -57,10 +79,31 @@ class ConsolidationProcessor:
             )
         return {"status": "ok", **stats}
 
+    async def run_due(self, *, dry_run: bool = False) -> dict[str, dict]:
+        with self.session_factory() as db:
+            identity_ids = list(
+                db.scalars(
+                    select(Memory.identity_id)
+                    .where(
+                        Memory.tier == "episodic",
+                        Memory.status == "active",
+                        Memory.promotion_status == "pending",
+                        Memory.identity_id.is_not(None),
+                    )
+                    .distinct()
+                )
+            )
+        results = {}
+        for identity_id in identity_ids:
+            results[identity_id] = await self.run_sweep(
+                identity_id=identity_id, dry_run=dry_run
+            )
+        return results
+
     async def run_forever(self, interval_seconds: int) -> None:
         while True:
             try:
-                result = await self.run_sweep(dry_run=False)
+                result = await self.run_due(dry_run=False)
                 logger.info("consolidation sweep: %s", result)
             except Exception as exc:  # 单次失败不终止守护循环
                 logger.warning("consolidation sweep failed: %s", exc)
@@ -86,6 +129,76 @@ class ConsolidationProcessor:
             )
             if item.promotion_status == "pending" and item.trust in ("owner", "agent")
         ]
+
+    def _eligible(self, db, identity_id: str, candidates: list[Memory]) -> list[Memory]:
+        """在模型调用前执行可审计的晋升门槛。"""
+        forgotten = set(
+            db.scalars(
+                select(ForgottenConversation.conversation_id).where(
+                    ForgottenConversation.identity_id == identity_id
+                )
+            )
+        )
+        valid = [
+            item
+            for item in candidates
+            if item.conversation_id not in forgotten and self._entry_is_current(identity_id, item)
+        ]
+        eligible: list[Memory] = []
+        for candidate in valid:
+            query_hashes = set(
+                db.scalars(
+                    select(MemoryRecallEvent.query_hash).where(
+                        MemoryRecallEvent.identity_id == identity_id,
+                        MemoryRecallEvent.memory_id == candidate.id,
+                    )
+                )
+            )
+            recalled_enough = len(query_hashes) >= 3
+            active_work_referenced = (
+                candidate.type in ("goal", "project") and bool(query_hashes)
+            )
+            repeated = any(
+                other.id != candidate.id
+                and self._independent(candidate, other)
+                and self._semantically_related(candidate.content, other.content)
+                for other in valid
+            )
+            if (
+                candidate.trust == "owner"
+                or recalled_enough
+                or active_work_referenced
+                or repeated
+            ):
+                eligible.append(candidate)
+        return eligible
+
+    def _entry_is_current(self, identity_id: str, memory: Memory) -> bool:
+        if not memory.file_path or not memory.entry_key:
+            return False
+        try:
+            path = self.store.resolve_relative(memory.file_path)
+        except ValueError:
+            return False
+        return self.store.is_managed_path(identity_id, path) and (
+            self.store.index_by_id(path, memory.entry_key) is not None
+        )
+
+    @staticmethod
+    def _independent(left: Memory, right: Memory) -> bool:
+        if left.conversation_id and right.conversation_id:
+            return left.conversation_id != right.conversation_id
+        left_time = left.observed_at or left.created_at
+        right_time = right.observed_at or right.created_at
+        return left_time.date() != right_time.date()
+
+    @staticmethod
+    def _semantically_related(left: str, right: str) -> bool:
+        plan = build_query_plan(left)
+        return max(
+            (_lexical_similarity(variant, right) for variant in plan.variants),
+            default=0.0,
+        ) >= 0.18
 
     @staticmethod
     def _threshold_met(candidates) -> bool:

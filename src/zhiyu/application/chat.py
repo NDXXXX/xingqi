@@ -1,15 +1,17 @@
 """Conversation and Agent orchestration independent from any user interface."""
 
 import asyncio
+import logging
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
-from zhiyu.core.agent.context import build_tool_registry, with_agent_context
+from zhiyu.core.agent.context import build_tool_registry, with_agent_context_async
 from zhiyu.core.agent.run_manager import active_runs
 from zhiyu.core.agent.runtime import run_agent, run_agent_stream
 from zhiyu.core.memory.manager import MemoryManager
+from zhiyu.core.memory.indexer import rebuild_index
 from zhiyu.application.memory_jobs import MemoryJobProcessor
 from zhiyu.core.recall import build_recall
 from zhiyu.core.providers.router import ProviderRouter, provider_router
@@ -20,6 +22,9 @@ from zhiyu.infrastructure.database.repositories.conversation_repository import C
 from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository
 from zhiyu.infrastructure.database.repositories.message_repository import MessageRepository
 from zhiyu.infrastructure.database.repositories.memory_job_repository import MemoryJobRepository
+
+
+logger = logging.getLogger(__name__)
 
 class ConversationNotFoundError(ValueError):
     pass
@@ -63,7 +68,7 @@ class ChatService:
         self.identities = IdentityRepository()
         self.runs = AgentRunRepository()
 
-    def _prepare(self, db: Session, request: ChatRequest):
+    async def _prepare(self, db: Session, request: ChatRequest):
         if request.conversation_id:
             conversation = self.conversations.get(db, request.conversation_id)
             if conversation is None:
@@ -97,6 +102,14 @@ class ChatService:
             conversation.identity_id = self.identities.local(db).id
             db.commit()
 
+        memory_manager = self.memory_processor.memory_manager
+        if isinstance(memory_manager, MemoryManager) and conversation.identity_id:
+            try:
+                rebuild_index(db, memory_manager.store, conversation.identity_id)
+            except Exception as exc:
+                db.rollback()
+                logger.warning("memory index recovery degraded: %s", exc)
+
         try:
             provider, model_config = select_provider_model(
                 db,
@@ -127,7 +140,7 @@ class ChatService:
             recall = build_recall(
                 db, conversation.identity_id, exclude_conversation_id=conversation.id
             )
-        llm_messages = with_agent_context(
+        llm_messages = await with_agent_context_async(
             db,
             conversation,
             request.message,
@@ -159,7 +172,7 @@ class ChatService:
                 model,
                 llm_messages,
                 user_message_id,
-            ) = self._prepare(db, request)
+            ) = await self._prepare(db, request)
             provider = self.providers.get_provider(provider_config)
             registry = build_tool_registry()
             run = self.runs.create(db, conversation.id, provider_config.id, model)
