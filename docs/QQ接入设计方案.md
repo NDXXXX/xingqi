@@ -1,9 +1,10 @@
 # QQ 接入设计方案
 
-> 版本：v1.1  
-> 日期：2026-09-29  
+> 版本：v1.2
+> 日期：2026-10-05
 > 目标：把当前“手填 OneBot WebSocket 地址”升级为类似 OpenClaw 的“扫码绑定、自动连接、可控权限、可恢复会话”QQ 渠道。
-> 当前边界：CLI 阶段只实现 OneBot 反向 WebSocket 私聊；官方 Bot、扫码、Web API 和图形界面均为后续规划。
+> 当前边界：已实现 OneBot 反向 WebSocket 私聊和可选主人群聊文本；官方 Bot、扫码与富媒体仍为后续规划。本地 Web API 和最小 WebUI 已落地。
+> 个人 Agent 的 Session 与共享记忆边界见[单机个人 Agent 多 Session 共享记忆设计方案](单机个人Agent多Session共享记忆设计方案.md)。
 
 ## 1. 结论
 
@@ -29,7 +30,7 @@ QQAdapter
   → ChannelRouter
   → Conversation / Identity / Memory
   → Agent Runtime
-  → send_private_msg
+  → send_private_msg / send_group_msg
   → NapCat / Lagrange
   → QQ
 ```
@@ -39,7 +40,7 @@ QQAdapter
 - `src/zhiyu/cli/main.py`：提供 `qq configure/listen/status` 命令。
 - `src/zhiyu/application/channels.py`：保存配置，Token 放系统 Keyring，管理监听生命周期。
 - `src/zhiyu/channels/manager.py`：创建 QQAdapter，管理监听和连接状态。
-- `src/zhiyu/channels/qq/adapter.py`：监听 OneBot 反向 WebSocket，只处理私聊文本。
+- `src/zhiyu/channels/qq/adapter.py`：监听 OneBot 反向 WebSocket，处理私聊文本和受策略控制的主人群聊文本。
 - `src/zhiyu/channels/router.py`：将消息交给共享 ChatService。
 
 ### 2.2 现有能力
@@ -49,18 +50,24 @@ QQAdapter
 - NapCat 断开后继续监听，等待其自动重连。
 - 监听、连接和错误状态展示。
 - 配置持久化和启动自动重连。
-- QQ 用户 Identity 和 Memory 隔离。
+- 单主人 QQ 白名单；未配置或发送者不匹配时拒绝访问 Agent。
+- `/new` 创建独立 QQ Session，旧消息保留。
+- 获准 QQ Session 与本机 Session 共用 local identity 的长期记忆，原始聊天记录仍按 Session 隔离。
+- 统一文本、图片、语音、文件、@ 和引用消息组件；QQ 当前只接通文本与 @ 解析。
+- OneBot `echo` 回执、超时、发送结果持久化和入站事件去重。
+- 同一会话串行、不同会话并行，并设置全局并发上限。
+- 群聊默认关闭；启用后仅主人可用且默认必须 @ 机器人。
 
 ### 2.3 当前问题
 
 1. 当前采用反向 WebSocket，只允许一个 NapCat 客户端连接。
-2. 只处理 `message_type=private` 和 text segment，没有群聊、@ 触发、图片、语音、文件、引用。
-3. `IncomingMessage.external_conversation_id` 没有真正参与会话查找；Router 仍然用 `external_user_id` 定位会话，无法正确支持群聊。
+2. QQ 只真正收发文本；图片、语音、文件和引用目前只有统一组件结构，尚未接通协议转换。
+3. 私聊和群聊已有独立会话键，但尚未覆盖多账号维度。
 4. 一个 `channel` 只能有一份配置，无法支持多 QQ Bot/多账号。
-5. 没有白名单、私聊/群聊策略、群工具限权，任何能联系 Bot 的人都可触发 Agent。
-6. 没有消息去重、持久化入队、同会话串行化和发送回执，断线/崩溃时可能丢消息或重复回复。
-7. `send_message` 不等待 OneBot `echo` 响应，无法知道 QQ 端是否真正发送成功。
-8. 没有 Gateway session/resume、心跳健康检查、长消息分片和限流。
+5. 群聊只有“主人 + 可选启用 + 默认需 @”的基础策略，没有群白名单和按群工具限权。
+6. 入站事件与发送结果已持久化，但尚无进程崩溃后自动恢复未完成 Agent 工作的持久队列。
+7. `send_message` 已等待 OneBot `echo` 并校验返回码；发送结果未知时不会自动重发。
+8. 没有 Gateway session/resume、完整心跳审计、长消息分片和限流。
 
 ## 3. OpenClaw 可借鉴的部分
 
@@ -210,13 +217,13 @@ class ChannelEnvelope:
 (channel, account_id, external_conversation_id)
 ```
 
-Identity 键：
+未来支持多用户或多账号时的主体键：
 
 ```text
 (channel, account_id, external_user_id)
 ```
 
-这是必须的数据迁移：同一个 QQ OpenID 只对应某一个 Bot，不能跨 Bot 当作同一身份。
+该键不直接等于当前个人 Agent 的记忆归属。当前获准主人 Session 统一映射到 local identity；未来若支持多用户或多 Agent，才按账号与外部用户建立独立主体和 vault。
 
 ## 7. 数据模型
 
@@ -451,7 +458,7 @@ auth_error → rebind / replace_secret
 
 - QQ 事件 → ChannelEnvelope 解析。
 - 私聊/群聊策略矩阵。
-- 会话键和 Identity 键隔离。
+- 会话键与记忆归属分别验证。
 - 去重、peer lock、debounce、长文分块。
 - 凭据替换的原子性。
 
@@ -475,7 +482,7 @@ auth_error → rebind / replace_secret
 
 1. 用户可以通过扫码完成 QQ 官方 Bot 绑定，无需手填 WebSocket 地址。
 2. AppSecret 不落入 SQLite、日志或前端状态。
-3. 私聊、群聊、多 Bot 之间的会话与 Memory 完全隔离。
+3. 私聊、群聊、多 Bot 之间的会话记录保持隔离；记忆是否共享由明确的 Agent/主体归属决定。
 4. 群聊默认必须 @，高风险工具默认不可用。
 5. 同一 Gateway 事件重放不会触发两次 Agent 回复。
 6. 断网、进程重启和 Gateway Resume 后能自动恢复。

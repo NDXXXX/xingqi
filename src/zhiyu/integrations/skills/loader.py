@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class Skill(BaseModel):
@@ -10,12 +10,16 @@ class Skill(BaseModel):
     description: str
     content: str
     path: str
+    enabled: bool = True
+    required_tools: list[str] = Field(default_factory=list)
 
 
 def parse_skill(skill_md: Path, fallback_name: str) -> Skill:
     text = skill_md.read_text(encoding="utf-8")
     name = fallback_name
     description = ""
+    enabled = True
+    required_tools: list[str] = []
     body = text.strip()
     if text.startswith("---"):
         parts = text.split("---", 2)
@@ -30,7 +34,18 @@ def parse_skill(skill_md: Path, fallback_name: str) -> Skill:
                         name = value
                     elif key == "description":
                         description = value
-    return Skill(name=name, description=description, content=body, path=str(skill_md.parent))
+                    elif key == "enabled":
+                        enabled = value.lower() not in {"false", "no", "0", "off"}
+                    elif key == "required_tools":
+                        required_tools = [item.strip() for item in value.split(",") if item.strip()]
+    return Skill(
+        name=name,
+        description=description,
+        content=body,
+        path=str(skill_md.parent),
+        enabled=enabled,
+        required_tools=required_tools,
+    )
 
 
 def load_skills(skills_dir: Path) -> list[Skill]:

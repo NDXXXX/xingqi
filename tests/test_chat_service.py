@@ -3,11 +3,16 @@
 import asyncio
 from unittest.mock import AsyncMock
 
+import httpx
+
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from zhiyu.application.chat import ChatRequest, ChatService
+from zhiyu.application.memories import MemoryService
+from zhiyu.core.memory.manager import MemoryManager
+from zhiyu.core.memory.store import MemoryStore
 from zhiyu.core.providers.base import AIProvider, LLMResponse
 from zhiyu.infrastructure.database import models  # noqa: F401
 from zhiyu.infrastructure.database.db import Base
@@ -15,6 +20,10 @@ from zhiyu.infrastructure.database.repositories.agent_run_repository import Agen
 from zhiyu.infrastructure.database.repositories.message_repository import MessageRepository
 from zhiyu.infrastructure.database.repositories.memory_job_repository import MemoryJobRepository
 from zhiyu.infrastructure.database.repositories.provider_repository import ProviderRepository
+from zhiyu.infrastructure.database.repositories.setting_repository import SettingRepository
+from zhiyu.infrastructure.database.repositories.integration_repository import ChannelConfigRepository
+from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository
+from zhiyu.infrastructure.database.repositories.conversation_repository import ConversationRepository
 
 
 class FakeProvider(AIProvider):
@@ -104,7 +113,8 @@ async def test_chat_done_does_not_wait_for_memory_extraction():
         provider = ProviderRepository().create(
             db, name="Fake", provider_type="openai", api_key_ref="env:FAKE_KEY"
         )
-        model = provider.models[0]
+        provider_id = provider.id
+        model_name = provider.models[0].model_name
 
     started = asyncio.Event()
     release = asyncio.Event()
@@ -118,7 +128,7 @@ async def test_chat_done_does_not_wait_for_memory_extraction():
     service = ChatService(sessions, FakeRouter(), BlockingMemoryManager())
     result = await asyncio.wait_for(
         service.complete(
-            ChatRequest(message="你好", provider_id=provider.id, model=model.model_name)
+            ChatRequest(message="你好", provider_id=provider_id, model=model_name)
         ),
         timeout=1,
     )
@@ -127,6 +137,174 @@ async def test_chat_done_does_not_wait_for_memory_extraction():
     await asyncio.wait_for(started.wait(), timeout=1)
     release.set()
     await service.memory_processor.wait_idle()
+
+
+async def test_chat_service_applies_model_capabilities():
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    with sessions() as db:
+        provider_config = ProviderRepository().create(
+            db, name="Fake", provider_type="openai", api_key_ref="env:FAKE_KEY"
+        )
+        model = provider_config.models[0]
+        model.supports_tools = False
+        model.supports_streaming = False
+        model.max_output_tokens = 321
+        provider_id = provider_config.id
+        model_name = model.model_name
+        db.commit()
+
+    class CapturingProvider(AIProvider):
+        def __init__(self):
+            super().__init__("fake-key")
+            self.requests = []
+
+        async def chat(self, messages, tools=None, stream=False, **kwargs):
+            self.requests.append({"tools": tools, "stream": stream, **kwargs})
+            return LLMResponse(content="非流式回复")
+
+    class CapturingRouter:
+        def __init__(self, provider):
+            self.provider = provider
+
+        def get_provider(self, _config):
+            return self.provider
+
+    provider = CapturingProvider()
+    service = ChatService(sessions, CapturingRouter(provider), AsyncMock())
+    events = [
+        event
+        async for event in service.run(
+            ChatRequest(message="你好", provider_id=provider_id, model=model_name)
+        )
+    ]
+    await service.memory_processor.wait_idle()
+
+    assert [event["text"] for event in events if event["type"] == "chunk"] == ["非流式回复"]
+    assert provider.requests[0] == {
+        "tools": None,
+        "stream": False,
+        "model": model_name,
+        "max_output_tokens": 321,
+    }
+
+
+async def test_provider_call_does_not_hold_database_session():
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    open_sessions = 0
+
+    class TrackingSession(Session):
+        def __init__(self, *args, **kwargs):
+            nonlocal open_sessions
+            super().__init__(*args, **kwargs)
+            self._tracking_closed = False
+            open_sessions += 1
+
+        def close(self):
+            nonlocal open_sessions
+            if not self._tracking_closed:
+                open_sessions -= 1
+                self._tracking_closed = True
+            super().close()
+
+    sessions = sessionmaker(
+        bind=engine,
+        class_=TrackingSession,
+        autoflush=False,
+        autocommit=False,
+    )
+    Base.metadata.create_all(engine)
+    with sessions() as db:
+        provider_config = ProviderRepository().create(
+            db, name="Fake", provider_type="openai", api_key_ref="env:FAKE_KEY"
+        )
+        provider_id = provider_config.id
+        model_name = provider_config.models[0].model_name
+
+    class CheckingProvider(FakeProvider):
+        async def chat(self, messages, tools=None, stream=False, **kwargs):
+            assert open_sessions == 0
+            return await super().chat(messages, tools, stream, **kwargs)
+
+    class CheckingRouter:
+        def get_provider(self, _provider):
+            return CheckingProvider("fake-key")
+
+    service = ChatService(sessions, CheckingRouter(), AsyncMock())
+    await service.complete(
+        ChatRequest(message="你好", provider_id=provider_id, model=model_name)
+    )
+    await service.memory_processor.wait_idle()
+
+    assert open_sessions == 0
+
+
+async def test_chat_service_uses_configured_fallback_and_records_usage():
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    with sessions() as db:
+        primary = ProviderRepository().create(
+            db, name="Primary", provider_type="openai", api_key_ref="env:PRIMARY_KEY"
+        )
+        backup = ProviderRepository().create(
+            db, name="Backup", provider_type="openai", api_key_ref="env:BACKUP_KEY"
+        )
+        SettingRepository().set(
+            db,
+            "provider_fallbacks",
+            {primary.id: [backup.id]},
+        )
+        primary_id = primary.id
+        primary_model = primary.models[0].model_name
+        backup_id = backup.id
+        backup_model = backup.models[0].model_name
+
+    class OfflineProvider(AIProvider):
+        async def chat(self, messages, tools=None, stream=False, **kwargs):
+            request = httpx.Request("POST", "https://offline.invalid")
+            raise httpx.ConnectError("offline", request=request)
+
+    class UsageProvider(AIProvider):
+        async def chat(self, messages, tools=None, stream=False, **kwargs):
+            return LLMResponse(
+                content="备用回复",
+                prompt_tokens=21,
+                completion_tokens=5,
+            )
+
+    class RoutingProvider:
+        def get_provider(self, config):
+            if config.id == primary_id:
+                return OfflineProvider("primary")
+            return UsageProvider("backup")
+
+    service = ChatService(sessions, RoutingProvider(), AsyncMock())
+    result = await service.complete(
+        ChatRequest(
+            message="你好",
+            provider_id=primary_id,
+            model=primary_model,
+        )
+    )
+    await service.memory_processor.wait_idle()
+
+    with sessions() as db:
+        run = AgentRunRepository().list_for_conversation(db, result.conversation_id)[0]
+        jobs = MemoryJobRepository().list_by_status(db, "completed")
+    assert result.response == "备用回复"
+    assert run.provider_id == backup_id
+    assert run.model_id == backup_model
+    assert run.prompt_tokens == 21
+    assert run.completion_tokens == 5
+    assert jobs[0].provider_id == backup_id
 
 
 async def test_channel_conversation_key_is_separate_from_identity():
@@ -142,6 +320,9 @@ async def test_channel_conversation_key_is_separate_from_identity():
             provider_type="openai",
             api_key_ref="env:FAKE_KEY",
         )
+        ChannelConfigRepository().upsert(
+            db, "qq", "ws://localhost:6199/ws", None, owner_user_id="u1"
+        )
     service = ChatService(sessions, FakeRouter(), AsyncMock())
     first = await service.complete(ChatRequest(
         message="one", channel="qq", external_user_id="u1", external_conversation_id="group-1"
@@ -151,3 +332,177 @@ async def test_channel_conversation_key_is_separate_from_identity():
     ))
     await service.memory_processor.wait_idle()
     assert first.conversation_id != second.conversation_id
+    with sessions() as db:
+        first_conversation = ConversationRepository().get(db, first.conversation_id)
+        second_conversation = ConversationRepository().get(db, second.conversation_id)
+        local_identity = IdentityRepository().local(db)
+        assert first_conversation.identity_id == local_identity.id
+        assert second_conversation.identity_id == local_identity.id
+
+
+async def test_unauthorized_qq_sender_is_rejected_before_conversation_creation():
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    with sessions() as db:
+        ProviderRepository().create(
+            db, name="Fake", provider_type="openai", api_key_ref="env:FAKE_KEY"
+        )
+        ChannelConfigRepository().upsert(
+            db, "qq", "ws://localhost:6199/ws", None, owner_user_id="owner"
+        )
+    service = ChatService(sessions, FakeRouter(), AsyncMock())
+
+    try:
+        await service.complete(
+            ChatRequest(
+                message="private info",
+                channel="qq",
+                external_user_id="stranger",
+                external_conversation_id="stranger",
+            )
+        )
+    except ValueError as exc:
+        assert "未获准" in str(exc)
+    else:
+        raise AssertionError("unauthorized QQ sender was accepted")
+
+    with sessions() as db:
+        assert ConversationRepository().list(db) == []
+
+
+async def test_qq_new_session_keeps_history_separate_and_reuses_shared_identity():
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    with sessions() as db:
+        provider = ProviderRepository().create(
+            db, name="Fake", provider_type="openai", api_key_ref="env:FAKE_KEY"
+        )
+        provider_id = provider.id
+        model_name = provider.models[0].model_name
+        ChannelConfigRepository().upsert(
+            db, "qq", "ws://localhost:6199/ws", None, owner_user_id="owner"
+        )
+    service = ChatService(sessions, FakeRouter(), AsyncMock())
+
+    first = await service.complete(
+        ChatRequest(
+            message="第一条 session 的内容",
+            channel="qq",
+            external_user_id="owner",
+            external_conversation_id="owner",
+            provider_id=provider_id,
+            model=model_name,
+        )
+    )
+    new_conversation = service.new_channel_session("qq", "owner", "owner")
+    second = await service.complete(
+        ChatRequest(
+            message="第二条 session 的内容",
+            channel="qq",
+            external_user_id="owner",
+            external_conversation_id="owner",
+            provider_id=provider_id,
+            model=model_name,
+        )
+    )
+    await service.memory_processor.wait_idle()
+
+    with sessions() as db:
+        first_messages = MessageRepository().list_by_conversation(db, first.conversation_id)
+        second_messages = MessageRepository().list_by_conversation(db, second.conversation_id)
+        current = ConversationRepository().get_by_external(db, "qq", "owner")
+        assert first.conversation_id != new_conversation.id
+        assert second.conversation_id == new_conversation.id
+        assert current.id == new_conversation.id
+        assert all("第二条" not in message.content for message in first_messages)
+        assert all("第一条" not in message.content for message in second_messages)
+        assert {item.identity_id for item in (current, ConversationRepository().get(db, first.conversation_id))} == {
+            IdentityRepository().local(db).id
+        }
+
+
+async def test_local_and_qq_share_memories_without_sharing_transcripts(tmp_path):
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    with sessions() as db:
+        provider_config = ProviderRepository().create(
+            db, name="Fake", provider_type="openai", api_key_ref="env:FAKE_KEY"
+        )
+        provider_id = provider_config.id
+        model_name = provider_config.models[0].model_name
+        ChannelConfigRepository().upsert(
+            db, "qq", "ws://localhost:6199/ws", None, owner_user_id="owner"
+        )
+
+    class MemoryAwareProvider(AIProvider):
+        def __init__(self):
+            super().__init__("fake-key")
+            self.agent_messages = []
+
+        async def chat(self, messages, tools=None, stream=False, **kwargs):
+            prompt = str(messages[0].get("content", "")) if messages else ""
+            if "情景记忆提取器" in prompt:
+                if "我的代号是星河" in prompt:
+                    return LLMResponse(content=(
+                        '[{"type":"profile","content":"用户的代号是星河",'
+                        '"evidence":"我的代号是星河"}]'
+                    ))
+                return LLMResponse(content="[]")
+            self.agent_messages.append(messages)
+            return LLMResponse(content="收到")
+
+    class CapturingRouter:
+        def __init__(self, provider):
+            self.provider = provider
+
+        def get_provider(self, _config):
+            return self.provider
+
+    store = MemoryStore(tmp_path)
+    provider = MemoryAwareProvider()
+    service = ChatService(
+        sessions,
+        CapturingRouter(provider),
+        MemoryManager(store),
+    )
+    MemoryService(sessions, store=store).add(
+        type="preference", content="用户喜欢爵士乐"
+    )
+
+    await service.complete(ChatRequest(
+        message="我喜欢什么音乐？",
+        channel="qq",
+        external_user_id="owner",
+        external_conversation_id="owner",
+        provider_id=provider_id,
+        model=model_name,
+    ))
+    assert "用户喜欢爵士乐" in str(provider.agent_messages[-1])
+
+    await service.complete(ChatRequest(
+        message="我的代号是星河；蓝鲸口令只留在这条原始记录里",
+        channel="qq",
+        external_user_id="owner",
+        external_conversation_id="owner",
+        provider_id=provider_id,
+        model=model_name,
+    ))
+    await service.memory_processor.wait_idle()
+
+    await service.complete(ChatRequest(
+        message="我的代号是什么？",
+        provider_id=provider_id,
+        model=model_name,
+    ))
+    local_context = str(provider.agent_messages[-1])
+    assert "用户的代号是星河" in local_context
+    assert "蓝鲸口令" not in local_context

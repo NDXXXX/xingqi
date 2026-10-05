@@ -1,5 +1,7 @@
 """Provider configuration use cases."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 import os
 from uuid import uuid4
@@ -12,6 +14,8 @@ from zhiyu.infrastructure.database.db import SessionLocal
 from zhiyu.infrastructure.database.repositories.provider_repository import ProviderRepository
 from zhiyu.infrastructure.database.repositories.setting_repository import SettingRepository
 
+
+PROVIDER_FALLBACKS_KEY = "provider_fallbacks"
 
 @dataclass(slots=True)
 class ProviderSummary:
@@ -109,6 +113,24 @@ class ProviderService:
                 DEFAULT_MODEL_KEY,
                 {"provider_id": provider.id, "model_id": model.id},
             )
+
+    def set_fallbacks(self, provider_name: str, fallback_names: list[str]) -> None:
+        with self.session_factory() as db:
+            provider = self.providers.get_by_name(db, provider_name)
+            if provider is None or not provider.enabled:
+                raise ValueError("主 Provider 不存在或未启用")
+            fallback_ids: list[str] = []
+            for name in fallback_names:
+                fallback = self.providers.get_by_name(db, name)
+                if fallback is None or not fallback.enabled or not fallback.configured:
+                    raise ValueError(f"备用 Provider 不存在、未启用或未配置：{name}")
+                if fallback.id == provider.id:
+                    raise ValueError("主 Provider 不能作为自己的备用")
+                if fallback.id not in fallback_ids:
+                    fallback_ids.append(fallback.id)
+            mapping = self.settings.get(db, PROVIDER_FALLBACKS_KEY) or {}
+            mapping[provider.id] = fallback_ids
+            self.settings.set(db, PROVIDER_FALLBACKS_KEY, mapping)
 
     async def test(self, provider_name: str, model_name: str | None = None) -> str:
         with self.session_factory() as db:

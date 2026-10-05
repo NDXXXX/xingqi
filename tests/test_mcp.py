@@ -2,8 +2,14 @@
 
 from types import SimpleNamespace
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from zhiyu.application.mcp import McpService
 from zhiyu.integrations.mcp.connection import McpConnection, McpTool
 from zhiyu.integrations.mcp.manager import McpManager
+from zhiyu.infrastructure.database.db import Base
 
 
 async def test_mcp_tool_conversion_and_execute():
@@ -79,3 +85,59 @@ async def test_connection_namespaces_tools(monkeypatch):
     assert await tools[0].execute(path="/tmp/a") == "ok"
     assert calls == [("read_file", {"path": "/tmp/a"})]
     await connection.close()
+
+
+async def test_manager_filters_tools_with_allowlist(monkeypatch):
+    async def fake_call(_args):
+        return "ok"
+
+    class FakeConnection:
+        def __init__(self, name, command, args):
+            self.name = name
+            self.command = command
+            self.args = args
+            self.tools = []
+
+        async def connect(self):
+            self.tools = [
+                McpTool("files.read", "read", {}, fake_call),
+                McpTool("files.write", "write", {}, fake_call),
+            ]
+            return self.tools
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr("zhiyu.integrations.mcp.manager.McpConnection", FakeConnection)
+    manager = McpManager()
+
+    tools = await manager.connect(
+        "files",
+        "fake",
+        [],
+        tool_allowlist=["read"],
+    )
+
+    assert [tool.name for tool in tools] == ["files.read"]
+    assert [tool.name for tool in manager.tools()] == ["files.read"]
+
+
+def test_mcp_service_persists_allowlist():
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine)
+    service = McpService(sessions)
+
+    service.configure(
+        "files",
+        "mcp-files",
+        ["--root", "/tmp/work"],
+        ["read_file"],
+    )
+
+    item = service.list()[0]
+    assert item.name == "files"
+    assert item.args == ["--root", "/tmp/work"]
+    assert item.tool_allowlist == ["read_file"]

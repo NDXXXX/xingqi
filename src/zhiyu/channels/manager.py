@@ -2,14 +2,18 @@
 
 from datetime import datetime, timezone
 
+from zhiyu.application.inbound import ChannelReliabilityService
+from zhiyu.infrastructure.database.db import SessionLocal
+
 from .base import ChannelAdapter
 from .qq.adapter import QQAdapter
 from .router import ChannelRouter
 
 
 class ChannelManager:
-    def __init__(self, router: ChannelRouter):
+    def __init__(self, router: ChannelRouter, session_factory=SessionLocal):
         self.router = router
+        self.reliability = ChannelReliabilityService(session_factory)
         self._adapters: dict[str, ChannelAdapter] = {}
         self._states: dict[str, dict] = {
             "qq": {
@@ -38,16 +42,28 @@ class ChannelManager:
         elif status == "disconnected":
             state["last_disconnected_at"] = now
 
-    async def connect(self, channel: str, ws_url: str, access_token: str | None = None) -> None:
+    async def connect(
+        self,
+        channel: str,
+        ws_url: str,
+        access_token: str | None = None,
+        owner_user_id: str | None = None,
+        allow_group_messages: bool = False,
+        group_require_mention: bool = True,
+    ) -> None:
         if channel != "qq":
             raise ValueError(f"未知渠道: {channel}")
         adapter = QQAdapter(
             self.router,
             ws_url,
             access_token,
-            lambda status, error, retries: self._set_status(
+            on_status=lambda status, error, retries: self._set_status(
                 channel, status, error, retries
             ),
+            owner_user_id=owner_user_id,
+            allow_group_messages=allow_group_messages,
+            group_require_mention=group_require_mention,
+            reliability=self.reliability,
         )
         await self.disconnect(channel)
         await adapter.start()

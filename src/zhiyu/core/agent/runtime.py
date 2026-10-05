@@ -5,11 +5,14 @@ import json
 from collections.abc import AsyncGenerator
 from typing import Any
 
+import httpx
+
 from zhiyu.core.providers.base import AIProvider, LLMResponse
 from zhiyu.core.tools.registry import ToolRegistry
 from .graph import MAX_ROUNDS
 
 RUN_TIMEOUT_SECONDS = 180
+ProviderFallback = tuple[str, AIProvider, str]
 
 
 def _redact(value: Any) -> Any:
@@ -32,6 +35,14 @@ def _redact_output(value: Any) -> Any:
     return _redact(value)
 
 
+def _retryable_provider_error(exc: Exception) -> bool:
+    if isinstance(exc, (TimeoutError, ConnectionError, httpx.TimeoutException, httpx.NetworkError)):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code == 429 or exc.response.status_code >= 500
+    return False
+
+
 async def _execute(
     provider: AIProvider,
     registry: ToolRegistry,
@@ -39,31 +50,109 @@ async def _execute(
     messages: list[dict[str, Any]],
     *,
     streaming: bool,
+    emit_content: bool = False,
+    supports_tools: bool = True,
+    max_output_tokens: int | None = None,
+    provider_id: str | None = None,
+    fallbacks: list[ProviderFallback] | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     current_messages = list(messages)
-    tools = registry.to_openai_tools()
+    tools = registry.to_openai_tools() if supports_tools else None
+    candidates: list[ProviderFallback] = [
+        (provider_id or "primary", provider, model),
+        *(fallbacks or []),
+    ]
+    active_candidate = 0
     final_response = ""
+    prompt_tokens = 0
+    completion_tokens = 0
+    has_usage = False
 
     yield {"type": "step", "name": "load_context", "status": "completed"}
     for round_number in range(1, MAX_ROUNDS + 1):
         response: LLMResponse | None = None
         emitted_content = False
+        call_succeeded = False
+        last_error: Exception | None = None
 
-        if streaming:
-            async for item in provider.stream_chat(messages=current_messages, tools=tools, model=model):
-                if isinstance(item, str):
-                    emitted_content = True
-                    yield {"type": "chunk", "text": item}
+        for candidate_index in range(active_candidate, len(candidates)):
+            candidate_id, candidate_provider, candidate_model = candidates[candidate_index]
+            provider_options: dict[str, Any] = {"model": candidate_model}
+            if max_output_tokens is not None:
+                provider_options["max_output_tokens"] = max_output_tokens
+            for attempt in range(2):
+                response = None
+                emitted_content = False
+                try:
+                    if streaming:
+                        async for item in candidate_provider.stream_chat(
+                            messages=current_messages,
+                            tools=tools,
+                            **provider_options,
+                        ):
+                            if isinstance(item, str):
+                                emitted_content = True
+                                yield {"type": "chunk", "text": item}
+                            else:
+                                response = item
+                    else:
+                        result = await candidate_provider.chat(
+                            messages=current_messages,
+                            tools=tools,
+                            stream=False,
+                            **provider_options,
+                        )
+                        if not isinstance(result, LLMResponse):
+                            raise TypeError("stream=False 必须返回 LLMResponse")
+                        response = result
+                except Exception as exc:
+                    last_error = exc
+                    if emitted_content or not _retryable_provider_error(exc):
+                        raise
+                    if attempt == 0:
+                        yield {
+                            "type": "step",
+                            "name": "provider_retry",
+                            "status": "completed",
+                            "output": {"provider_id": candidate_id, "model": candidate_model},
+                        }
+                        await asyncio.sleep(0)
+                        continue
+                    break
                 else:
-                    response = item
-        else:
-            result = await provider.chat(messages=current_messages, tools=tools, model=model, stream=False)
-            if not isinstance(result, LLMResponse):
-                raise TypeError("stream=False 必须返回 LLMResponse")
-            response = result
+                    active_candidate = candidate_index
+                    call_succeeded = True
+                    break
+            if call_succeeded:
+                break
+            if candidate_index + 1 < len(candidates):
+                next_id, _, next_model = candidates[candidate_index + 1]
+                yield {
+                    "type": "step",
+                    "name": "provider_fallback",
+                    "status": "completed",
+                    "output": {
+                        "from_provider_id": candidate_id,
+                        "to_provider_id": next_id,
+                        "model": next_model,
+                        "reason": str(last_error) if last_error else "provider unavailable",
+                    },
+                }
+
+        if not call_succeeded:
+            if last_error is not None:
+                raise last_error
+            raise RuntimeError("没有可用的 Provider")
 
         if response is None:
             raise RuntimeError("Provider 流结束但未返回最终状态")
+
+        if response.prompt_tokens is not None:
+            prompt_tokens += response.prompt_tokens
+            has_usage = True
+        if response.completion_tokens is not None:
+            completion_tokens += response.completion_tokens
+            has_usage = True
 
         yield {"type": "step", "name": "call_llm", "status": "completed"}
         assistant: dict[str, Any] = {"role": "assistant", "content": response.content or ""}
@@ -81,7 +170,7 @@ async def _execute(
             ]
         current_messages.append(assistant)
 
-        if response.tool_calls and round_number < MAX_ROUNDS:
+        if supports_tools and response.tool_calls and round_number < MAX_ROUNDS:
             for call in response.tool_calls:
                 tool = registry.get(call.name)
                 error: str | None = None
@@ -114,13 +203,26 @@ async def _execute(
             yield {"type": "step", "name": "execute_tool", "status": "completed"}
             continue
 
+        if response.tool_calls and round_number >= MAX_ROUNDS:
+            final_response = response.content or "已达到工具调用轮次上限，请缩小任务范围后重试。"
+            if emit_content and final_response and not emitted_content:
+                yield {"type": "chunk", "text": final_response}
+            break
+
         final_response = response.content or ""
-        if streaming and final_response and not emitted_content:
+        if emit_content and final_response and not emitted_content:
             yield {"type": "chunk", "text": final_response}
         break
 
     yield {"type": "step", "name": "finalize", "status": "completed"}
-    yield {"type": "final", "final_response": final_response}
+    yield {
+        "type": "final",
+        "final_response": final_response,
+        "prompt_tokens": prompt_tokens if has_usage else None,
+        "completion_tokens": completion_tokens if has_usage else None,
+        "provider_id": candidates[active_candidate][0],
+        "model": candidates[active_candidate][2],
+    }
 
 
 async def run_agent(
@@ -129,10 +231,25 @@ async def run_agent(
     model: str,
     conversation_id: str,
     messages: list[dict[str, Any]],
+    *,
+    supports_tools: bool = True,
+    max_output_tokens: int | None = None,
+    provider_id: str | None = None,
+    fallbacks: list[ProviderFallback] | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     del conversation_id
     async with asyncio.timeout(RUN_TIMEOUT_SECONDS):
-        async for event in _execute(provider, registry, model, messages, streaming=False):
+        async for event in _execute(
+            provider,
+            registry,
+            model,
+            messages,
+            streaming=False,
+            supports_tools=supports_tools,
+            max_output_tokens=max_output_tokens,
+            provider_id=provider_id,
+            fallbacks=fallbacks,
+        ):
             yield event
 
 
@@ -142,8 +259,25 @@ async def run_agent_stream(
     model: str,
     conversation_id: str,
     messages: list[dict[str, Any]],
+    *,
+    supports_streaming: bool = True,
+    supports_tools: bool = True,
+    max_output_tokens: int | None = None,
+    provider_id: str | None = None,
+    fallbacks: list[ProviderFallback] | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     del conversation_id
     async with asyncio.timeout(RUN_TIMEOUT_SECONDS):
-        async for event in _execute(provider, registry, model, messages, streaming=True):
+        async for event in _execute(
+            provider,
+            registry,
+            model,
+            messages,
+            streaming=supports_streaming,
+            emit_content=True,
+            supports_tools=supports_tools,
+            max_output_tokens=max_output_tokens,
+            provider_id=provider_id,
+            fallbacks=fallbacks,
+        ):
             yield event

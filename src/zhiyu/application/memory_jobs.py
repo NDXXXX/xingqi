@@ -24,21 +24,69 @@ class MemoryJobProcessor:
         session_factory=SessionLocal,
         providers: ProviderRouter = provider_router,
         memory_manager: MemoryManager | None = None,
+        retry_delays: tuple[float, ...] = (1.0, 5.0),
     ) -> None:
         self.session_factory = session_factory
         self.providers = providers
         self.memory_manager = memory_manager or MemoryManager()
         self.jobs = MemoryJobRepository()
         self.memories = MemoryRepository()
+        self.retry_delays = retry_delays
         self._task: asyncio.Task | None = None
+        self._wake_requested = False
 
     def kick(self) -> None:
+        self._wake_requested = True
         if self._task is None or self._task.done():
-            self._task = asyncio.create_task(self.process_pending(recover=True))
+            task = asyncio.create_task(self._run_worker())
+            self._task = task
+            task.add_done_callback(self._worker_done)
+
+    async def _run_worker(self) -> None:
+        recover = True
+        retry_round = 0
+        while True:
+            self._wake_requested = False
+            result = await self.process_pending(recover=recover)
+            recover = False
+            if result["retried"]:
+                delay = (
+                    self.retry_delays[min(retry_round, len(self.retry_delays) - 1)]
+                    if self.retry_delays
+                    else 0
+                )
+                retry_round += 1
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                continue
+            retry_round = 0
+            await asyncio.sleep(0)
+            if not self._wake_requested:
+                return
+
+    def _worker_done(self, task: asyncio.Task) -> None:
+        if self._task is task:
+            self._task = None
+        if self._wake_requested:
+            self.kick()
 
     async def wait_idle(self) -> None:
-        if self._task is not None:
-            await self._task
+        while self._task is not None:
+            task = self._task
+            await task
+            await asyncio.sleep(0)
+
+    async def stop(self) -> None:
+        """停止当前 Worker；被中断的 processing 任务会恢复为 pending。"""
+        self._wake_requested = False
+        task = self._task
+        if task is None:
+            return
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        if self._task is task:
+            self._task = None
 
     async def process_pending(self, *, recover: bool = True) -> dict[str, int]:
         if recover:

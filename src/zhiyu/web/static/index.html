@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>知语</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark">知</span>
+        <div><strong>知语</strong><small>Personal Agent</small></div>
+      </div>
+      <button id="new-chat" class="primary wide">新对话</button>
+      <nav class="nav" aria-label="主导航">
+        <button class="nav-item active" data-view="chat">对话</button>
+        <button class="nav-item" data-view="memory">长期记忆</button>
+      </nav>
+      <div class="section-title">最近会话</div>
+      <div id="conversations" class="conversation-list"></div>
+      <div class="runtime-card">
+        <span id="health-dot" class="dot"></span>
+        <div><strong id="health-text">正在连接</strong><small id="runtime-detail">检查运行状态</small></div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <section id="chat-view" class="view active">
+        <header class="topbar">
+          <div><small>当前会话</small><h1 id="conversation-title">新的对话</h1></div>
+          <div id="model-badge" class="badge">默认模型</div>
+        </header>
+        <div id="messages" class="messages">
+          <div class="empty-state">
+            <span>知</span>
+            <h2>有什么想一起处理的？</h2>
+            <p>对话、工具与长期记忆都由同一个本地 Agent 处理。</p>
+          </div>
+        </div>
+        <div id="activity" class="activity" aria-live="polite"></div>
+        <form id="composer" class="composer">
+          <textarea id="message-input" rows="1" placeholder="输入消息，Enter 发送，Shift + Enter 换行"></textarea>
+          <button id="send" class="send" type="submit" aria-label="发送">↑</button>
+        </form>
+      </section>
+
+      <section id="memory-view" class="view">
+        <header class="topbar">
+          <div><small>可查看、搜索与纠正</small><h1>长期记忆</h1></div>
+          <div id="memory-count" class="badge">0 条</div>
+        </header>
+        <div class="memory-toolbar">
+          <input id="memory-search" type="search" placeholder="搜索长期记忆">
+          <select id="memory-tier" aria-label="记忆层级">
+            <option value="">全部层级</option>
+            <option value="core">核心记忆</option>
+            <option value="episodic">情景记忆</option>
+          </select>
+        </div>
+        <div id="memories" class="memory-list"></div>
+      </section>
+    </main>
+  </div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

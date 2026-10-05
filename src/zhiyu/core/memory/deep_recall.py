@@ -73,6 +73,7 @@ def _search_history(
         for item in ConversationRepository().list(db)
         if item.identity_id == identity_id
         and item.id != exclude_conversation_id
+        and (current_conversation_id is None or item.id == current_conversation_id)
         and item.id not in forgotten
     ]
     plan = build_query_plan(query)

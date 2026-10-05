@@ -2,6 +2,7 @@
 
 from zhiyu.integrations.skills.loader import load_skills, parse_skill
 from zhiyu.integrations.skills.registry import SkillRegistry
+from zhiyu.core.tools.skills import ReadSkillTool
 
 
 def _write_skill(root, name: str, md: str):
@@ -44,3 +45,34 @@ def test_registry_match(tmp_path):
     reg = SkillRegistry(tmp_path)
     result = reg.match("帮我分析这个 GitHub 仓库")
     assert result and result[0].name == "github-analysis"
+
+
+async def test_skill_body_is_loaded_only_through_tool(tmp_path):
+    _write_skill(
+        tmp_path,
+        "research",
+        "---\nname: research\ndescription: 深度研究\nrequired_tools: calculator\n---\n\n秘密步骤正文",
+    )
+    registry = SkillRegistry(tmp_path)
+    unavailable = ReadSkillTool(registry, set())
+    available = ReadSkillTool(registry, {"calculator"})
+
+    try:
+        await unavailable.execute(name="research")
+    except ValueError as exc:
+        assert "不可用" in str(exc)
+    else:
+        raise AssertionError("缺少依赖工具的 Skill 被读取")
+
+    assert await available.execute(name="research") == "秘密步骤正文"
+
+
+def test_disabled_skill_is_not_matched(tmp_path):
+    _write_skill(
+        tmp_path,
+        "disabled",
+        "---\nname: disabled\ndescription: 分析仓库\nenabled: false\n---\n\n正文",
+    )
+    registry = SkillRegistry(tmp_path)
+
+    assert registry.match("帮我分析仓库") == []

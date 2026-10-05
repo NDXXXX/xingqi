@@ -21,6 +21,8 @@ class LLMResponse:
 
     content: str | None
     tool_calls: list[ToolCall] = field(default_factory=list)
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
 
 
 class AIProvider(ABC):

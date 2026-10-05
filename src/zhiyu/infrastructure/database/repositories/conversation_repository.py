@@ -24,7 +24,11 @@ class ConversationRepository:
         return db.scalars(
             select(Conversation)
             .where(Conversation.channel == channel, Conversation.external_user_id == external_user_id)
-            .order_by(Conversation.updated_at.desc())
+            .order_by(
+                Conversation.updated_at.desc(),
+                Conversation.created_at.desc(),
+                Conversation.id.desc(),
+            )
         ).first()
 
     def create(

@@ -82,7 +82,12 @@ class AnthropicProvider(AIProvider):
         if not model:
             raise ValueError("缺少 model")
         system, converted_messages = self._payload_messages(messages)
-        payload: dict[str, Any] = {"model": model, "messages": converted_messages, "max_tokens": 1024, "stream": stream}
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": converted_messages,
+            "max_tokens": kwargs.get("max_output_tokens") or 1024,
+            "stream": stream,
+        }
         if "temperature" in kwargs:
             payload["temperature"] = kwargs["temperature"]
         if system:
@@ -116,13 +121,21 @@ class AnthropicProvider(AIProvider):
                 tool_calls.append(
                     ToolCall(id=block.get("id", ""), name=block.get("name", ""), arguments=block.get("input") or {})
                 )
-        return LLMResponse(content="".join(content_parts), tool_calls=tool_calls)
+        usage = data.get("usage") or {}
+        return LLMResponse(
+            content="".join(content_parts),
+            tool_calls=tool_calls,
+            prompt_tokens=usage.get("input_tokens"),
+            completion_tokens=usage.get("output_tokens"),
+        )
 
     async def _stream(
         self, headers: dict[str, str], payload: dict[str, Any]
     ) -> AsyncGenerator[str | LLMResponse, None]:
         content_parts: list[str] = []
         pending_calls: dict[int, dict[str, str]] = {}
+        prompt_tokens: int | None = None
+        completion_tokens: int | None = None
         async with httpx.AsyncClient(timeout=60.0, trust_env=False) as client:
             async with client.stream(
                 "POST", f"{self.base_url}/v1/messages", headers=headers, json=payload
@@ -133,7 +146,13 @@ class AnthropicProvider(AIProvider):
                         continue
                     data = json.loads(line[5:].strip())
                     event_type = data.get("type")
-                    if event_type == "content_block_start":
+                    if event_type == "message_start":
+                        usage = (data.get("message") or {}).get("usage") or {}
+                        prompt_tokens = usage.get("input_tokens")
+                    elif event_type == "message_delta":
+                        usage = data.get("usage") or {}
+                        completion_tokens = usage.get("output_tokens")
+                    elif event_type == "content_block_start":
                         block = data.get("content_block") or {}
                         if block.get("type") == "tool_use":
                             pending_calls[data.get("index", 0)] = {
@@ -161,4 +180,9 @@ class AnthropicProvider(AIProvider):
             except json.JSONDecodeError:
                 arguments = {}
             tool_calls.append(ToolCall(id=call["id"], name=call["name"], arguments=arguments))
-        yield LLMResponse(content="".join(content_parts), tool_calls=tool_calls)
+        yield LLMResponse(
+            content="".join(content_parts),
+            tool_calls=tool_calls,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )

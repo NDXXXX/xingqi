@@ -1,5 +1,6 @@
 """持久化记忆提取任务测试。"""
 
+import asyncio
 from unittest.mock import AsyncMock
 
 from sqlalchemy import create_engine
@@ -106,6 +107,47 @@ async def test_failed_job_stops_after_three_attempts_and_can_retry():
         job = MemoryJobRepository().get(db, job_id)
         assert job.status == "pending"
         assert job.attempts == 0
+
+
+async def test_kick_retries_transient_failure_without_another_kick():
+    factory, job_id, _user_id, _identity_id = _queued_job()
+    manager = AsyncMock()
+    manager.extract_and_save.side_effect = [RuntimeError("临时失败"), []]
+    processor = MemoryJobProcessor(
+        factory, FakeRouter(), manager, retry_delays=(0, 0)
+    )
+
+    processor.kick()
+    await processor.wait_idle()
+
+    with factory() as db:
+        job = MemoryJobRepository().get(db, job_id)
+        assert job.status == "completed"
+        assert job.attempts == 2
+
+
+async def test_kick_while_worker_is_running_requests_another_scan():
+    processor = MemoryJobProcessor(retry_delays=(0, 0))
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def controlled_process_pending(*, recover=True):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            entered.set()
+            await release.wait()
+        return {"completed": 0, "retried": 0, "failed": 0, "cancelled": 0}
+
+    processor.process_pending = controlled_process_pending
+    processor.kick()
+    await entered.wait()
+    processor.kick()
+    release.set()
+    await processor.wait_idle()
+
+    assert calls == 2
 
 
 def test_manual_edit_cancels_pending_jobs_for_identity(tmp_path):

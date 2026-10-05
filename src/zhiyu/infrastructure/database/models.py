@@ -48,6 +48,18 @@ class Message(Base):
     conversation: Mapped["Conversation"] = relationship(back_populates="messages")
 
 
+class ConversationSummary(Base):
+    __tablename__ = "conversation_summaries"
+
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), primary_key=True
+    )
+    content: Mapped[str] = mapped_column(Text)
+    source_message_count: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
 class Provider(Base):
     __tablename__ = "providers"
 
@@ -327,10 +339,57 @@ class ChannelConfig(Base):
     name: Mapped[str] = mapped_column(String(255))
     endpoint: Mapped[str] = mapped_column(String(500))
     secret_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    owner_user_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    allow_group_messages: Mapped[bool] = mapped_column(Boolean, default=False)
+    group_require_mention: Mapped[bool] = mapped_column(Boolean, default=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     auto_connect: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class ChannelEvent(Base):
+    __tablename__ = "channel_events"
+    __table_args__ = (
+        UniqueConstraint(
+            "channel",
+            "account_id",
+            "external_event_id",
+            name="uq_channel_event_external",
+        ),
+        Index("ix_channel_events_status_received", "status", "received_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    channel: Mapped[str] = mapped_column(String(32))
+    account_id: Mapped[str] = mapped_column(String(255))
+    external_event_id: Mapped[str] = mapped_column(String(255))
+    conversation_key: Mapped[str] = mapped_column(String(1000))
+    payload_json: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), default="processing")
+    attempts: Mapped[int] = mapped_column(Integer, default=1)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class ChannelDelivery(Base):
+    __tablename__ = "channel_deliveries"
+    __table_args__ = (
+        Index("ix_channel_deliveries_event_created", "event_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    event_id: Mapped[str | None] = mapped_column(
+        ForeignKey("channel_events.id", ondelete="SET NULL"), nullable=True
+    )
+    request_id: Mapped[str] = mapped_column(String(255), unique=True)
+    provider_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, default=1)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class McpServerConfig(Base):
@@ -340,6 +399,7 @@ class McpServerConfig(Base):
     name: Mapped[str] = mapped_column(String(255), unique=True)
     command: Mapped[str] = mapped_column(String(500))
     args_json: Mapped[str] = mapped_column(Text, default="[]")
+    tool_allowlist_json: Mapped[str] = mapped_column(Text, default="[]")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     auto_connect: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

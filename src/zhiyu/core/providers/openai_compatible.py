@@ -21,8 +21,12 @@ class OpenAICompatibleProvider(AIProvider):
         if not model:
             raise ValueError("缺少 model")
         payload: dict[str, Any] = {"model": model, "messages": messages, "stream": stream}
+        if stream:
+            payload["stream_options"] = {"include_usage": True}
         if "temperature" in kwargs:
             payload["temperature"] = kwargs["temperature"]
+        if kwargs.get("max_output_tokens") is not None:
+            payload["max_tokens"] = kwargs["max_output_tokens"]
         if tools:
             payload["tools"] = tools
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
@@ -50,13 +54,20 @@ class OpenAICompatibleProvider(AIProvider):
             tool_calls.append(
                 ToolCall(id=raw.get("id", ""), name=fn.get("name", ""), arguments=arguments)
             )
-        return LLMResponse(content=content, tool_calls=tool_calls)
+        usage = data.get("usage") or {}
+        return LLMResponse(
+            content=content,
+            tool_calls=tool_calls,
+            prompt_tokens=usage.get("prompt_tokens"),
+            completion_tokens=usage.get("completion_tokens"),
+        )
 
     async def _stream(
         self, headers: dict[str, str], payload: dict[str, Any]
     ) -> AsyncGenerator[str | LLMResponse, None]:
         content_parts: list[str] = []
         pending_calls: dict[int, dict[str, str]] = {}
+        usage: dict[str, int] = {}
         async with httpx.AsyncClient(timeout=60.0, trust_env=False) as client:
             async with client.stream(
                 "POST", f"{self.base_url}/chat/completions", headers=headers, json=payload
@@ -68,7 +79,13 @@ class OpenAICompatibleProvider(AIProvider):
                     data = line[5:].strip()
                     if data == "[DONE]":
                         break
-                    delta = json.loads(data)["choices"][0].get("delta", {})
+                    chunk = json.loads(data)
+                    if chunk.get("usage"):
+                        usage = chunk["usage"]
+                    choices = chunk.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta", {})
                     text = delta.get("content") or ""
                     if text:
                         content_parts.append(text)
@@ -91,4 +108,9 @@ class OpenAICompatibleProvider(AIProvider):
             except json.JSONDecodeError:
                 arguments = {}
             tool_calls.append(ToolCall(id=call["id"], name=call["name"], arguments=arguments))
-        yield LLMResponse(content="".join(content_parts), tool_calls=tool_calls)
+        yield LLMResponse(
+            content="".join(content_parts),
+            tool_calls=tool_calls,
+            prompt_tokens=usage.get("prompt_tokens"),
+            completion_tokens=usage.get("completion_tokens"),
+        )

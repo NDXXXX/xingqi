@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 from getpass import getpass
+import ipaddress
 import json
 import os
 import sys
@@ -16,6 +17,7 @@ from zhiyu.application.doctor import run_checks
 from zhiyu.application.consolidation_jobs import ConsolidationProcessor
 from zhiyu.application.memories import MemoryService
 from zhiyu.application.memory_jobs import MemoryJobProcessor
+from zhiyu.application.mcp import McpService
 from zhiyu.application.providers import ProviderService
 from zhiyu.core.recall import format_welcome, last_local_conversation, list_goals
 from zhiyu.core.tools.registry import default_registry
@@ -97,6 +99,10 @@ def _parser() -> argparse.ArgumentParser:
 
     sub.add_parser("doctor", help="检查本地运行环境")
 
+    serve = sub.add_parser("serve", help="启动本地 WebUI 与 API")
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8765)
+
     chat = sub.add_parser("chat", help="启动终端聊天")
     chat.add_argument("message", nargs="?", help="发送单条消息；省略后进入交互模式")
     chat.add_argument("--conversation", help="继续指定会话")
@@ -117,6 +123,9 @@ def _parser() -> argparse.ArgumentParser:
     provider_default = provider_sub.add_parser("default", help="设置默认模型")
     provider_default.add_argument("name")
     provider_default.add_argument("model")
+    provider_fallback = provider_sub.add_parser("fallback", help="配置 Provider故障切换顺序")
+    provider_fallback.add_argument("name", help="主 Provider名称")
+    provider_fallback.add_argument("fallbacks", nargs="*", help="备用 Provider名称，留空表示清除")
 
     character = sub.add_parser("character", help="管理角色")
     character_sub = character.add_subparsers(dest="character_command", required=True)
@@ -178,8 +187,38 @@ def _parser() -> argparse.ArgumentParser:
     qq_configure.add_argument("--endpoint", default="ws://127.0.0.1:6199/ws")
     qq_configure.add_argument("--token-env", help="从环境变量读取 Access Token")
     qq_configure.add_argument("--no-token", action="store_true")
+    qq_configure.add_argument("--owner-user-id", help="允许使用个人 Agent 的主人 QQ 号")
+    qq_configure.add_argument("--clear-owner-user-id", action="store_true")
+    qq_configure.add_argument(
+        "--group-messages",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="允许主人在群聊中通过 @ 使用 Agent（默认关闭）",
+    )
+    qq_configure.add_argument(
+        "--group-require-mention",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="群聊消息是否必须 @ Agent（默认开启）",
+    )
     qq_sub.add_parser("listen", help="监听 NapCat 连接")
     qq_sub.add_parser("status", help="显示持久化配置")
+
+    mcp = sub.add_parser("mcp", help="管理 MCP stdio服务器")
+    mcp_sub = mcp.add_subparsers(dest="mcp_command", required=True)
+    mcp_sub.add_parser("list", help="列出 MCP服务器")
+    mcp_add = mcp_sub.add_parser("add", help="添加或更新 MCP服务器")
+    mcp_add.add_argument("name")
+    mcp_add.add_argument("command")
+    mcp_add.add_argument("--arg", action="append", default=[], help="传给服务器的参数，可重复")
+    mcp_add.add_argument(
+        "--allow-tool",
+        action="append",
+        default=[],
+        help="只开放指定工具，可重复；省略表示开放全部",
+    )
+    mcp_disable = mcp_sub.add_parser("disable", help="禁用 MCP服务器")
+    mcp_disable.add_argument("name")
 
     database = sub.add_parser("db", help="数据库维护")
     database_sub = database.add_subparsers(dest="db_command", required=True)
@@ -622,6 +661,10 @@ def _provider(args) -> None:
     elif args.provider_command == "test":
         response = asyncio.run(service.test(args.name, args.model))
         print(response)
+    elif args.provider_command == "fallback":
+        service.set_fallbacks(args.name, args.fallbacks)
+        value = " → ".join(args.fallbacks) if args.fallbacks else "无"
+        print(f"{args.name} 的备用 Provider：{value}")
 
 
 def _qq(args) -> None:
@@ -635,6 +678,10 @@ def _qq(args) -> None:
             token=token,
             token_env=args.token_env,
             clear_token=args.no_token,
+            owner_user_id=args.owner_user_id,
+            clear_owner_user_id=args.clear_owner_user_id,
+            allow_group_messages=args.group_messages,
+            group_require_mention=args.group_require_mention,
         )
         print(f"QQ 已配置：{args.endpoint}")
     elif args.qq_command == "status":
@@ -643,7 +690,12 @@ def _qq(args) -> None:
             print("QQ 尚未配置")
         else:
             token = "已配置" if config["has_token"] else "未配置"
-            print(f"endpoint={config['endpoint']} token={token}")
+            print(
+                f"endpoint={config['endpoint']} token={token} "
+                f"owner_user_id={config['owner_user_id']} "
+                f"groups={config['allow_group_messages']} "
+                f"group_require_mention={config['group_require_mention']}"
+            )
     elif args.qq_command == "listen":
         try:
             asyncio.run(_qq_listen(service))
@@ -684,6 +736,32 @@ def _embedding(args) -> None:
         print("embedding 已配置")
 
 
+def _mcp(args) -> None:
+    service = McpService()
+    if args.mcp_command == "list":
+        items = service.list()
+        if not items:
+            print("尚未配置 MCP服务器")
+            return
+        for item in items:
+            tools = ",".join(item.tool_allowlist) if item.tool_allowlist else "*"
+            print(
+                f"{item.name}\t{'enabled' if item.enabled else 'disabled'}\t"
+                f"{item.command}\ttools={tools}"
+            )
+    elif args.mcp_command == "add":
+        item = service.configure(
+            args.name,
+            args.command,
+            args.arg,
+            args.allow_tool,
+        )
+        print(f"MCP 已配置：{item.name}")
+    elif args.mcp_command == "disable":
+        service.disable(args.name)
+        print(f"MCP 已禁用：{args.name}")
+
+
 async def _dream(args) -> None:
     processor = ConsolidationProcessor()
     if args.once:
@@ -692,6 +770,26 @@ async def _dream(args) -> None:
         return
     print(f"记忆巩固守护启动，间隔 {args.interval} 秒。按 Ctrl+C 停止。")
     await processor.run_forever(args.interval)
+
+
+def _serve(args) -> None:
+    try:
+        is_loopback = args.host.lower() == "localhost" or ipaddress.ip_address(
+            args.host
+        ).is_loopback
+    except ValueError as exc:
+        raise ValueError("Web监听地址必须是本机回环地址") from exc
+    if not is_loopback:
+        raise ValueError("当前 WebUI 仅允许监听本机回环地址")
+    if not 1 <= args.port <= 65535:
+        raise ValueError("端口必须在 1 到 65535 之间")
+
+    import uvicorn
+
+    from zhiyu.api import create_app
+
+    print(f"知语 WebUI：http://{args.host}:{args.port}")
+    uvicorn.run(create_app(), host=args.host, port=args.port)
 
 
 def run(argv: list[str] | None = None) -> int:
@@ -712,7 +810,9 @@ def run(argv: list[str] | None = None) -> int:
             for check in checks:
                 print(f"{icons[check.status]} {check.name}: {check.detail}")
             return 1 if any(check.status == "fail" for check in checks) else 0
-        if args.command == "chat":
+        if args.command == "serve":
+            _serve(args)
+        elif args.command == "chat":
             if not args.message and sys.stdin.isatty() and sys.stdout.isatty():
                 _chat_tui(args)
             else:
@@ -725,6 +825,8 @@ def run(argv: list[str] | None = None) -> int:
             _provider(args)
         elif args.command == "qq":
             _qq(args)
+        elif args.command == "mcp":
+            _mcp(args)
         elif args.command == "dream":
             try:
                 asyncio.run(_dream(args))

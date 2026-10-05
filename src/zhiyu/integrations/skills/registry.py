@@ -31,6 +31,14 @@ class SkillRegistry:
     def all(self) -> list[Skill]:
         return list(self._skills.values())
 
+    def available(self, tool_names: set[str] | None = None) -> list[Skill]:
+        tools = tool_names or set()
+        return [
+            skill
+            for skill in self._skills.values()
+            if skill.enabled and set(skill.required_tools) <= tools
+        ]
+
     def get(self, name: str) -> Skill | None:
         return self._skills.get(name)
 
@@ -39,7 +47,7 @@ class SkillRegistry:
         if not q:
             return []
         scored: list[tuple[int, Skill]] = []
-        for s in self._skills.values():
+        for s in self.available():
             overlap = len(q & _bigrams(f"{s.name} {s.description}"))
             if overlap:
                 scored.append((overlap, s))

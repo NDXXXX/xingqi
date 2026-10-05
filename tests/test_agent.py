@@ -1,5 +1,7 @@
 """Agent 图 tool-calling 循环测试（用 fake provider，不碰网络/DB）。"""
 
+import httpx
+
 from zhiyu.core.agent.runtime import run_agent, run_agent_stream
 from zhiyu.core.providers.base import AIProvider, LLMResponse, ToolCall
 from zhiyu.core.tools.registry import default_registry
@@ -74,7 +76,51 @@ async def test_streaming_agent_forwards_provider_chunks():
         events.append(event)
 
     assert [event["text"] for event in events if event["type"] == "chunk"] == ["直接", "回答"]
-    assert events[-1] == {"type": "final", "final_response": "直接回答"}
+    assert events[-1]["type"] == "final"
+    assert events[-1]["final_response"] == "直接回答"
+    assert events[-1]["provider_id"] == "primary"
+
+
+async def test_retryable_primary_failure_switches_to_fallback_and_records_usage():
+    class UnavailableProvider(PlainProvider):
+        def __init__(self):
+            self.calls = 0
+
+        async def chat(self, messages, tools=None, stream=False, **kwargs):
+            self.calls += 1
+            request = httpx.Request("POST", "https://primary.invalid")
+            raise httpx.ConnectError("offline", request=request)
+
+    class FallbackProvider(PlainProvider):
+        async def chat(self, messages, tools=None, stream=False, **kwargs):
+            return LLMResponse(
+                content="备用模型回答",
+                prompt_tokens=12,
+                completion_tokens=4,
+            )
+
+    primary = UnavailableProvider()
+    events = [
+        event
+        async for event in run_agent(
+            primary,
+            default_registry(),
+            "primary-model",
+            "conv-1",
+            [{"role": "user", "content": "你好"}],
+            provider_id="primary",
+            fallbacks=[("backup", FallbackProvider(), "backup-model")],
+        )
+    ]
+
+    assert primary.calls == 2
+    assert any(event.get("name") == "provider_retry" for event in events)
+    assert any(event.get("name") == "provider_fallback" for event in events)
+    assert events[-1]["final_response"] == "备用模型回答"
+    assert events[-1]["provider_id"] == "backup"
+    assert events[-1]["model"] == "backup-model"
+    assert events[-1]["prompt_tokens"] == 12
+    assert events[-1]["completion_tokens"] == 4
 
 
 async def test_streaming_agent_fallback_keeps_tool_loop():
@@ -86,3 +132,38 @@ async def test_streaming_agent_fallback_keeps_tool_loop():
 
     assert any(event.get("name") == "execute_tool" for event in events)
     assert events[-1]["final_response"] == "结果是 5"
+
+
+class CapabilityProvider(AIProvider):
+    def __init__(self):
+        super().__init__("fake-key")
+        self.requests = []
+
+    async def chat(self, messages, tools=None, stream=False, **kwargs):
+        self.requests.append({"tools": tools, "stream": stream, **kwargs})
+        return LLMResponse(content="完整回答")
+
+
+async def test_streaming_ui_falls_back_for_non_streaming_model_and_honors_limits():
+    provider = CapabilityProvider()
+    events = [
+        event
+        async for event in run_agent_stream(
+            provider,
+            default_registry(),
+            "test-model",
+            "conv-1",
+            [{"role": "user", "content": "你好"}],
+            supports_streaming=False,
+            supports_tools=False,
+            max_output_tokens=321,
+        )
+    ]
+
+    assert [event["text"] for event in events if event["type"] == "chunk"] == ["完整回答"]
+    assert provider.requests == [{
+        "tools": None,
+        "stream": False,
+        "model": "test-model",
+        "max_output_tokens": 321,
+    }]

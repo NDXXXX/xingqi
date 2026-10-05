@@ -2,7 +2,9 @@
 
 > 版本：v1.3  
 > 日期：2026-09-29  
-> 状态：Phase 0–3 已执行，进入 CLI 功能迭代阶段
+> 状态：Phase 0–5 已执行，进入 CLI、Web 与渠道协同迭代阶段
+
+> 实施说明：本文保留早期“先 CLI、后 Web”的阶段性决策。最小 FastAPI、SSE 和静态 WebUI 已于 2026-10-05 按 Phase 5 边界落地。
 
 ## 1. 决策
 
@@ -18,7 +20,7 @@ Web UI 验证完整产品体验
 
 当前阶段移除 Electron/React 桌面端，把 Python Agent Runtime 变成项目主体。CLI 是第一套交互界面，用来快速验证 Agent、模型、记忆、Skills、MCP 和 QQ 渠道。
 
-CLI 只负责接收参数、展示结果和维护交互循环。业务逻辑必须放在可复用的应用服务中，QQ 渠道和未来 Web API 调用同一套服务，不能在 CLI 命令里重新实现聊天、模型选择或渠道管理。
+CLI 只负责接收参数、展示结果和维护交互循环。业务逻辑必须放在可复用的应用服务中，QQ 渠道和 Web API 调用同一套服务，不能在 CLI 命令里重新实现聊天、模型选择或渠道管理。
 
 已确认的实施约束：
 
@@ -39,7 +41,7 @@ CLI 优先有四个直接收益：
 3. Provider、Memory、Tool、Skill、MCP 和 QQ 可以单独执行和测试。
 4. CLI 命令可以成为稳定的验收入口，方便自动化测试和故障排查。
 
-代价是暂时没有图形化配置、会话浏览和桌面安装包。这些能力推迟到核心行为稳定以后实现。
+CLI 优先阶段的代价是当时没有图形化配置和会话浏览；前两项现已由最小 WebUI 补齐。桌面安装包仍推迟到核心行为稳定以后。
 
 ## 3. 架构原则
 
@@ -50,7 +52,7 @@ CLI ─────────┐
              ├── Application Services ── Core ── Infrastructure
 QQ Channel ──┘
 
-未来 Web API ── Application Services
+Web API ──────── Application Services
 ```
 
 - `cli` 和 QQ Channel 是当前输入输出层，未来的 Web API 也是输入输出层。
@@ -234,7 +236,7 @@ class ChatService:
 - 以事件形式返回 step、tool、token、final 和 error。
 - 写入助手消息、Agent Run 和 Memory。
 
-CLI 和 QQ ChannelRouter 都调用该服务；未来 Web API 继续调用该服务。
+CLI、QQ ChannelRouter 和 Web API 都调用该服务。
 
 本地用户的稳定渠道标识统一为 `local`。迁移时将原有 `desktop` 本地会话映射到 `local`；CLI、Web UI 和未来桌面端不得分别创建 `cli`、`web`、`desktop` 三套身份与记忆。
 
@@ -418,7 +420,7 @@ CI 使用 macOS、Windows、Linux 三平台矩阵执行单元测试和 CLI 冒�
 
 ### Phase 4：以 CLI 迭代核心功能
 
-状态：进行中。
+状态：持续进行。
 
 - 每项 Agent、Memory、Skill、MCP 和 QQ 新能力先提供 CLI 路径。
 - 稳定 ChatEvent 和应用服务接口。
@@ -428,8 +430,10 @@ CI 使用 macOS、Windows、Linux 三平台矩阵执行单元测试和 CLI 冒�
 
 ### Phase 5：Web UI
 
-- 新建 `apps/web`。
-- 根据 Web UI 的实际需求重新引入 FastAPI。
+状态：已完成首版。
+
+- 新建 `src/zhiyu/api` 和 `src/zhiyu/web`。
+- 根据 Web UI 的实际需求重新引入 FastAPI 和静态页面。
 - FastAPI 仅负责鉴权、序列化、SSE/WebSocket 和调用应用服务。
 - Web UI 覆盖已经通过 CLI 验证的能力。
 
@@ -459,7 +463,7 @@ CLI 优先阶段完成时应满足：
 
 1. 仓库以 `src/zhiyu` Python 包为主体，不再依赖 Electron 和 Node.js。
 2. 用户能完全通过 CLI 配置 Provider、选择模型、进行流式聊天并启动 QQ。
-3. CLI 和 QQ 使用同一应用服务；未来 Web API 无需复制聊天编排。
+3. CLI、QQ 和 Web API 使用同一应用服务，不复制聊天编排。
 4. API Key 和 QQ Token 不以明文写入数据库、配置文件或日志。
 5. 旧数据库和配置能够迁移并验证，不因删除桌面端丢失。
 6. 新核心功能都有 CLI 验收路径和自动化测试。

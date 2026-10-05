@@ -9,9 +9,17 @@ from functools import partial
 
 from websockets.asyncio.client import connect as ws_connect
 from websockets.exceptions import InvalidStatus
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
+from zhiyu.application.inbound import ChannelReliabilityService
 from zhiyu.channels.manager import ChannelManager
+from zhiyu.channels.messages import DeliveryReceipt
+from zhiyu.channels.pipeline import AgentStage, DeliveryStage, InboundPipeline, RenderStage
 from zhiyu.channels.qq.adapter import QQAdapter
+from zhiyu.infrastructure.database.db import Base
+from zhiyu.infrastructure.database.models import ChannelDelivery, ChannelEvent
 
 
 connect = partial(ws_connect, proxy=None)
@@ -28,16 +36,44 @@ async def listener(unused_tcp_port):
     states = []
     router = AsyncMock()
     router.handle.return_value = "你好 [CQ:at,qq=123]"
-    adapter = QQAdapter(router, f"ws://127.0.0.1:{unused_tcp_port}/ws", "secret",
-                        lambda status, error, retries: states.append(status))
+    adapter = QQAdapter(
+        router,
+        f"ws://127.0.0.1:{unused_tcp_port}/ws",
+        "secret",
+        lambda status, error, retries: states.append(status),
+        owner_user_id="123",
+    )
     await adapter.start()
     yield adapter, router, states
     await adapter.stop()
 
 
-def private_message(text="你好"):
-    return json.dumps({"post_type": "message", "message_type": "private", "user_id": 123,
-                       "message": [{"type": "text", "data": {"text": text}}]})
+def private_message(text="你好", user_id=123, message_id=None):
+    payload = {
+        "post_type": "message",
+        "message_type": "private",
+        "user_id": user_id,
+        "message": [{"type": "text", "data": {"text": text}}],
+    }
+    if message_id is not None:
+        payload["message_id"] = message_id
+    return json.dumps(payload)
+
+
+def group_message(text="你好", group_id=456, *, mentioned=True, message_id=1):
+    message = []
+    if mentioned:
+        message.append({"type": "at", "data": {"qq": "999"}})
+    message.append({"type": "text", "data": {"text": text}})
+    return {
+        "post_type": "message",
+        "message_type": "group",
+        "self_id": 999,
+        "user_id": 123,
+        "group_id": group_id,
+        "message_id": message_id,
+        "message": message,
+    }
 
 
 async def test_reverse_private_message_and_reconnect(listener):
@@ -49,8 +85,20 @@ async def test_reverse_private_message_and_reconnect(listener):
             await ws.send('not json')
             await ws.send(private_message())
             reply = json.loads(await asyncio.wait_for(ws.recv(), 2))
-            assert reply == {"action": "send_private_msg", "params": {"user_id": 123,
-                "message": [{"type": "text", "data": {"text": "你好 [CQ:at,qq=123]"}}]}}
+            assert reply["action"] == "send_private_msg"
+            assert reply["params"] == {
+                "user_id": 123,
+                "message": [
+                    {"type": "text", "data": {"text": "你好 [CQ:at,qq=123]"}}
+                ],
+            }
+            assert reply["echo"]
+            await ws.send(json.dumps({
+                "status": "ok",
+                "retcode": 0,
+                "data": {"message_id": 789},
+                "echo": reply["echo"],
+            }))
             assert states[-1] == "connected"
         await wait_status(states, "listening")
     assert router.handle.await_count == 2
@@ -88,7 +136,34 @@ async def test_agent_error_does_not_disconnect(listener):
         await ws.send(private_message("再试一次"))
         reply = json.loads(await asyncio.wait_for(ws.recv(), 2))
         assert reply["params"]["message"][0]["data"]["text"] == "recovered"
+        await ws.send(json.dumps({
+            "status": "ok", "retcode": 0, "data": {}, "echo": reply["echo"]
+        }))
         assert states[-1] == "connected"
+
+
+async def test_new_command_starts_session_without_calling_agent(listener):
+    adapter, router, _ = listener
+    router.new_session.return_value = "已开启新的对话。"
+    async with connect(adapter.ws_url, additional_headers={"Authorization": "Bearer secret"}) as ws:
+        await ws.send(private_message("/new"))
+        reply = json.loads(await asyncio.wait_for(ws.recv(), 2))
+        await ws.send(json.dumps({
+            "status": "ok", "retcode": 0, "data": {}, "echo": reply["echo"]
+        }))
+    assert reply["params"]["message"][0]["data"]["text"] == "已开启新的对话。"
+    router.new_session.assert_awaited_once()
+    router.handle.assert_not_called()
+
+
+async def test_non_owner_private_message_is_ignored(listener):
+    adapter, router, _ = listener
+    async with connect(adapter.ws_url, additional_headers={"Authorization": "Bearer secret"}) as ws:
+        await ws.send(private_message("not for the owner", user_id=456))
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(ws.recv(), 0.05)
+    router.handle.assert_not_called()
+    router.new_session.assert_not_called()
 
 
 async def test_stop_cancels_busy_agent_and_releases_port(listener):
@@ -127,3 +202,145 @@ async def test_manager_reports_bind_failure(listener):
 def test_invalid_listener_url(url):
     with pytest.raises(ValueError):
         QQAdapter(AsyncMock(), url)
+
+
+def test_non_loopback_listener_requires_access_token():
+    with pytest.raises(ValueError, match="Access Token"):
+        QQAdapter(AsyncMock(), "ws://0.0.0.0:6199/ws", owner_user_id="123")
+
+
+def test_loopback_listener_allows_missing_access_token():
+    adapter = QQAdapter(
+        AsyncMock(), "ws://127.0.0.1:6199/ws", owner_user_id="123"
+    )
+    assert adapter.access_token is None
+
+
+async def test_persistent_dedup_and_delivery_receipt(unused_tcp_port):
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine)
+    router = AsyncMock()
+    router.handle.return_value = "收到"
+    reliability = ChannelReliabilityService(session_factory)
+    adapter = QQAdapter(
+        router,
+        f"ws://127.0.0.1:{unused_tcp_port}/ws",
+        owner_user_id="123",
+        reliability=reliability,
+        send_timeout_seconds=0.2,
+    )
+    await adapter.start()
+    try:
+        async with connect(adapter.ws_url) as ws:
+            raw = private_message(message_id=42)
+            await ws.send(raw)
+            reply = json.loads(await asyncio.wait_for(ws.recv(), 2))
+            await ws.send(json.dumps({
+                "status": "ok",
+                "retcode": 0,
+                "data": {"message_id": 9001},
+                "echo": reply["echo"],
+            }))
+
+            async with asyncio.timeout(2):
+                while True:
+                    with session_factory() as db:
+                        stored = db.get(ChannelEvent, "qq:qq-onebot-default:42")
+                        if stored is not None and stored.status == "completed":
+                            break
+                    await asyncio.sleep(0.01)
+
+            await ws.send(raw)
+            await asyncio.sleep(0.05)
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(ws.recv(), 0.05)
+
+        assert router.handle.await_count == 1
+        with session_factory() as db:
+            events = list(db.scalars(select(ChannelEvent)))
+            deliveries = list(db.scalars(select(ChannelDelivery)))
+            assert len(events) == 1
+            assert events[0].status == "completed"
+            assert len(deliveries) == 1
+            assert deliveries[0].status == "sent"
+            assert deliveries[0].provider_message_id == "9001"
+    finally:
+        await adapter.stop()
+
+
+def test_group_policy_requires_explicit_enable_and_mention():
+    router = AsyncMock()
+    disabled = QQAdapter(
+        router,
+        "ws://127.0.0.1:6199/ws",
+        owner_user_id="123",
+    )
+    enabled = QQAdapter(
+        router,
+        "ws://127.0.0.1:6199/ws",
+        owner_user_id="123",
+        allow_group_messages=True,
+    )
+
+    mentioned = enabled._to_event(group_message(mentioned=True))
+    not_mentioned = enabled._to_event(group_message(mentioned=False))
+
+    assert mentioned is not None
+    assert mentioned.conversation_type == "group"
+    assert mentioned.conversation_id == "456"
+    assert disabled._is_allowed(mentioned) is False
+    assert enabled._is_allowed(mentioned) is True
+    assert not_mentioned is not None
+    assert enabled._is_allowed(not_mentioned) is False
+
+
+async def test_same_conversation_is_serial_and_different_conversations_run_parallel():
+    adapter = QQAdapter(
+        AsyncMock(),
+        "ws://127.0.0.1:6199/ws",
+        owner_user_id="123",
+        allow_group_messages=True,
+    )
+    first_entered = asyncio.Event()
+    release_first = asyncio.Event()
+    second_same_entered = asyncio.Event()
+    other_entered = asyncio.Event()
+
+    async def handle(event):
+        if event.text == "first":
+            first_entered.set()
+            await release_first.wait()
+        elif event.text == "same":
+            second_same_entered.set()
+        else:
+            other_entered.set()
+        return "ok"
+
+    sender = AsyncMock(return_value=DeliveryReceipt(status="sent"))
+    adapter._pipeline = InboundPipeline(
+        [AgentStage(handle), RenderStage(), DeliveryStage(sender)]
+    )
+
+    first = asyncio.create_task(
+        adapter._handle_data(group_message("first", group_id=1, message_id=1))
+    )
+    await asyncio.wait_for(first_entered.wait(), 1)
+    same = asyncio.create_task(
+        adapter._handle_data(group_message("same", group_id=1, message_id=2))
+    )
+    other = asyncio.create_task(
+        adapter._handle_data(group_message("other", group_id=2, message_id=3))
+    )
+
+    await asyncio.wait_for(other_entered.wait(), 1)
+    await asyncio.sleep(0)
+    assert not second_same_entered.is_set()
+
+    release_first.set()
+    await asyncio.gather(first, same, other)
+    assert second_same_entered.is_set()

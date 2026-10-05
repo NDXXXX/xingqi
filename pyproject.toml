@@ -19,6 +19,8 @@ dependencies = [
     "websockets>=15",
     "python-dotenv>=1.2.3",
     "textual>=8.2.8",
+    "fastapi>=0.124",
+    "uvicorn>=0.38",
 ]
 
 [project.scripts]

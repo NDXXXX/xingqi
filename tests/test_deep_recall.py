@@ -58,6 +58,34 @@ def test_deep_recall_returns_episodic_and_history():
         assert "Rust" in result
 
 
+def test_runtime_deep_recall_does_not_search_other_sessions():
+    factory = _database()
+    with factory() as db:
+        identity = IdentityRepository().local(db)
+        current = ConversationRepository().create(
+            db, title="current", channel="local", identity_id=identity.id
+        )
+        other = ConversationRepository().create(
+            db, title="other", channel="qq", identity_id=identity.id
+        )
+        MessageRepository().create(
+            db,
+            conversation_id=other.id,
+            role="user",
+            content="我上次提到的火星殖民项目",
+        )
+        db.commit()
+
+        result = deep_recall(
+            db,
+            identity.id,
+            "我上次提到的火星殖民项目",
+            current_conversation_id=current.id,
+        )
+
+    assert result is None
+
+
 def test_forget_conversation_deletes_and_tombstones(tmp_path):
     factory = _database()
     store = MemoryStore(tmp_path)

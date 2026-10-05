@@ -217,7 +217,7 @@ def test_episodic_memory_is_injected_as_historical_evidence():
         assert events[0].recall_mode == "search"
 
 
-def test_unrelated_core_does_not_block_deep_recall():
+def test_deep_recall_does_not_inject_other_session_transcript():
     factory = _database()
     with factory() as db:
         identity_id = IdentityRepository().local(db).id
@@ -229,6 +229,17 @@ def test_unrelated_core_does_not_block_deep_recall():
             conversation_id=old.id,
             role="user",
             content="我决定用 Rust 重写同步模块",
+        )
+        MemoryRepository().create(
+            db,
+            type="project",
+            content="用户决定用 Rust 重写同步模块",
+            identity_id=identity_id,
+            tier="episodic",
+            trust="agent",
+            source_kind="message",
+            promotion_status="pending",
+            conversation_id=old.id,
         )
         current = ConversationRepository().create(
             db, title="current", channel="local", identity_id=identity_id
@@ -244,6 +255,7 @@ def test_unrelated_core_does_not_block_deep_recall():
             [{"role": "user", "content": "我上次说的 Rust 决定是什么"}],
         )
         assert "Rust 重写同步模块" in result[0]["content"]
+        assert "用户过去说过" not in result[0]["content"]
         assert "用户喜欢咖啡" not in result[0]["content"]
 
 

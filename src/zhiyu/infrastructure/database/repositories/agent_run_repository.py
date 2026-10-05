@@ -60,7 +60,18 @@ class AgentRunRepository:
         db.refresh(step)
         return step
 
-    def finish(self, db: Session, run_id: str, status: str, error: str | None = None) -> None:
+    def finish(
+        self,
+        db: Session,
+        run_id: str,
+        status: str,
+        error: str | None = None,
+        *,
+        prompt_tokens: int | None = None,
+        completion_tokens: int | None = None,
+        provider_id: str | None = None,
+        model_id: str | None = None,
+    ) -> None:
         run = db.get(AgentRun, run_id)
         if run is None:
             return
@@ -69,6 +80,12 @@ class AgentRunRepository:
         run.finished_at = finished_at
         run.duration_ms = int((finished_at - run.started_at).total_seconds() * 1000)
         run.error = error
+        run.prompt_tokens = prompt_tokens
+        run.completion_tokens = completion_tokens
+        if provider_id is not None:
+            run.provider_id = provider_id
+        if model_id is not None:
+            run.model_id = model_id
         db.commit()
 
     @staticmethod

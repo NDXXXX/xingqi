@@ -17,6 +17,13 @@ def test_configuration_error_has_stable_exit_code(monkeypatch, capsys):
     assert "配置错误" in capsys.readouterr().err
 
 
+def test_serve_rejects_non_loopback_host(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "upgrade_database", lambda: None)
+
+    assert cli.run(["serve", "--host", "0.0.0.0"]) == 2
+    assert "仅允许监听本机回环地址" in capsys.readouterr().err
+
+
 class _StubCharacterService:
     def __init__(self, **overrides):
         self.created: dict | None = None

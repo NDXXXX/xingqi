@@ -1,12 +1,14 @@
 # 知语
 
-运行在本地的 Personal AI Agent。当前阶段以 CLI 为唯一产品入口，用于开发和验证聊天、Provider、Agent、Memory、Skills、MCP 与 QQ 渠道。
+运行在本地的 Personal AI Agent。当前提供 CLI、TUI、本地 WebUI 与 QQ OneBot 入口，共用同一套 Agent、会话和长期记忆。
 
 ## 目录
 
 ```text
 src/zhiyu/
   cli/             命令行入口
+  api/             本地 Web API
+  web/             无构建静态 WebUI
   application/     可复用用例编排
   core/            Agent、Provider、Memory、Tools、Characters
   channels/        QQ 等消息入口
@@ -37,6 +39,19 @@ uv run zhiyu provider default work gpt-4o-mini
 uv run zhiyu chat
 ```
 
+启动仅监听本机的 WebUI：
+
+```bash
+uv run zhiyu serve
+# 打开 http://127.0.0.1:8765
+```
+
+配置主 Provider 的故障切换顺序：
+
+```bash
+uv run zhiyu provider fallback work backup-a backup-b
+```
+
 查看和纠正长期记忆：
 
 ```bash
@@ -55,6 +70,17 @@ uv run zhiyu memory recall-explain "接着做那个桌面助手"
 ```
 
 聊天结束后，长期记忆由持久化后台任务提取；单次 CLI 退出也不会丢失任务。常驻 TUI/QQ 会自动处理，`memory sync` 可手动恢复和执行待处理任务。
+
+长会话超过模型上下文预算时，知语保留最近完整轮次，并把较早消息压缩成可重新生成的派生摘要；原始消息不会被摘要替换。
+
+配置常驻 MCP stdio服务器及工具白名单：
+
+```bash
+uv run zhiyu mcp add filesystem npx --arg=-y --arg @modelcontextprotocol/server-filesystem --arg /path/to/workspace --allow-tool read_file
+uv run zhiyu mcp list
+```
+
+`zhiyu serve` 启动时自动连接已启用的 MCP服务器。Skill正文不会预先全部注入上下文，Agent只在需要时通过 `read_skill`读取匹配 Skill。
 
 使用已配置的 Provider 运行固定记忆语义评估集：
 
@@ -86,11 +112,21 @@ uv run zhiyu provider add deepseek --type deepseek --api-key-env DEEPSEEK_API_KE
 知语监听 OneBot v11 反向 WebSocket，由 NapCat 主动连接：
 
 ```bash
-uv run zhiyu qq configure --endpoint ws://127.0.0.1:6199/ws
+uv run zhiyu qq configure --endpoint ws://127.0.0.1:6199/ws --owner-user-id <你的QQ号>
 uv run zhiyu qq listen
 ```
 
-在 NapCat 新增 WebSocket 客户端，填写相同地址和 Token，消息格式选择 Array。当前只支持一个连接和私聊文本。
+在 NapCat 新增 WebSocket 客户端，填写相同地址和 Token，消息格式选择 Array。当前支持一个 OneBot连接、主人私聊文本以及可选的主人群聊文本。入站消息按消息 ID持久化去重，发送等待 OneBot `echo`回执；同一会话串行处理，不同会话可并行。发送 `/new` 可开始一条独立私聊会话，所有获准 QQ会话与本机共享记忆。
+
+群聊默认关闭；开启后默认仍然必须 @ Agent：
+
+```bash
+uv run zhiyu qq configure --group-messages --group-require-mention
+```
+
+图片、语音和文件已有统一消息结构，但尚未接通 QQ真实收发和模型多模态。
+
+监听地址不是 `localhost`、`127.0.0.0/8` 或 `::1` 时必须配置 Access Token；可通过 `--token-env <环境变量名>` 提供。
 
 ## 测试与安装
 
@@ -100,6 +136,6 @@ uv build
 uv tool install .
 ```
 
-安装后可以直接运行 `zhiyu doctor` 和 `zhiyu chat`。
+安装后可以直接运行 `zhiyu doctor`、`zhiyu chat` 和 `zhiyu serve`。
 
-开发路线见 [CLI 优先开发设计方案](docs/CLI优先开发设计方案.md)，QQ 后续范围见 [QQ 接入设计方案](docs/QQ接入设计方案.md)。
+本轮消息平台实现见 [AstrBot 式消息平台重构设计方案](docs/AstrBot式消息平台重构设计方案.md)，QQ 后续范围见 [QQ 接入设计方案](docs/QQ接入设计方案.md)。

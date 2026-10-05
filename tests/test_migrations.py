@@ -53,7 +53,10 @@ def test_upgrade_preserves_legacy_data(tmp_path):
 
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT title FROM conversations WHERE id='c1'")) == "保留我"
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0013_memory_vaults"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0016_context_mcp"
+        assert connection.scalar(
+            text("SELECT owner_user_id FROM channel_configs WHERE channel='qq'")
+        ) is None
         assert connection.scalar(text("SELECT channel FROM conversations WHERE id='c1'")) == "local"
         memory = connection.execute(text(
             "SELECT content, status, origin FROM memories WHERE id='m1'"
@@ -61,7 +64,18 @@ def test_upgrade_preserves_legacy_data(tmp_path):
         assert tuple(memory) == ("保留这条记忆", "active", "legacy")
     tables = set(inspect(engine).get_table_names())
     assert "app_settings" in tables
-    assert {"identities", "channel_configs", "mcp_server_configs", "memory_jobs"} <= tables
+    assert {
+        "identities",
+        "channel_configs",
+        "mcp_server_configs",
+        "memory_jobs",
+        "channel_events",
+        "channel_deliveries",
+        "conversation_summaries",
+    } <= tables
+    assert "tool_allowlist_json" in {
+        column["name"] for column in inspect(engine).get_columns("mcp_server_configs")
+    }
     assert {"created_at", "updated_at"} <= {column["name"] for column in inspect(engine).get_columns("providers")}
     assert {"status", "origin", "source_message_id", "supersedes_id"} <= {
         column["name"] for column in inspect(engine).get_columns("memories")
