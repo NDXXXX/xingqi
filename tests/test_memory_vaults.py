@@ -12,7 +12,7 @@ from sqlalchemy.pool import StaticPool
 
 from zhiyu.application.memories import MemoryService
 from zhiyu.core.memory.consolidation import apply_consolidation
-from zhiyu.core.memory.indexer import rebuild_index
+from zhiyu.core.memory.indexer import rebuild_index, sync_changed_index
 from zhiyu.core.memory.manager import MemoryManager
 from zhiyu.core.memory.mutations import FileMutationManager
 from zhiyu.core.memory.store import MemoryStore
@@ -755,6 +755,43 @@ async def test_explicit_single_target_correction_updates_core_immediately(tmp_pa
         assert "用户不喝咖啡" in text
 
 
+async def test_explicit_remember_writes_core_and_secret_is_ignored(tmp_path):
+    factory = _database()
+    store = MemoryStore(tmp_path)
+    with factory() as db:
+        identity_id = IdentityRepository().local(db).id
+        conversation = ConversationRepository().create(
+            db, title="remember", channel="local", identity_id=identity_id
+        )
+        message = MessageRepository().create(
+            db, conversation_id=conversation.id, role="user",
+            content="记住我喜欢手冲咖啡",
+        )
+        manager = MemoryManager(store=store)
+        written = await manager.extract_and_save(
+            db,
+            ObservationProvider([{
+                "type": "preference", "content": "用户喜欢手冲咖啡",
+                "evidence": "记住我喜欢手冲咖啡",
+            }]),
+            "test", message.content, "好的", identity_id,
+            user_message_id=message.id,
+        )
+        assert len(written) == 1
+        assert written[0].tier == "core"
+        assert written[0].source_message_id == message.id
+
+        secret = await manager.extract_and_save(
+            db,
+            ObservationProvider([{
+                "type": "fact", "content": "用户的 API Key 是 sk-1234567890abcdefghijkl",
+                "evidence": "我的 API Key 是 sk-1234567890abcdefghijkl",
+            }]),
+            "test", "记住我的 API Key 是 sk-1234567890abcdefghijkl", "好的", identity_id,
+        )
+        assert secret == []
+
+
 def test_trigger_is_regenerated_on_manual_edit(tmp_path):
     factory = _database()
     service = MemoryService(factory, store=MemoryStore(tmp_path))
@@ -766,3 +803,50 @@ def test_trigger_is_regenerated_on_manual_edit(tmp_path):
         assert "咖啡" in old.trigger_text
         assert "乌龙茶" in new.trigger_text
         assert old.status == "superseded"
+
+
+def test_changed_index_skips_unchanged_files_and_updates_only_edited_file(tmp_path, monkeypatch):
+    factory = _database()
+    store = MemoryStore(tmp_path)
+    with factory() as db:
+        identity_id = IdentityRepository().local(db).id
+        path = store.core_path_for(identity_id)
+        store.append(path, "用户喜欢咖啡", meta={"type": "preference", "id": "coffee"})
+        first = sync_changed_index(db, store, identity_id)
+        assert first["files_changed"] == 1
+        assert first["created"] == 1
+
+        original_read = store.read_entries
+        reads = []
+
+        def counted_read(file_path):
+            reads.append(file_path)
+            return original_read(file_path)
+
+        monkeypatch.setattr(store, "read_entries", counted_read)
+        unchanged = sync_changed_index(db, store, identity_id)
+        assert unchanged["files_changed"] == 0
+        assert reads == []
+
+        monkeypatch.setattr(store, "read_entries", original_read)
+        store.append(path, "用户喜欢乌龙茶", meta={"type": "preference", "id": "tea"})
+        edited = sync_changed_index(db, store, identity_id)
+        assert edited["files_changed"] == 1
+        assert edited["created"] == 1
+        assert {item.content for item in MemoryRepository().list_owned(db, identity_id)} == {
+            "用户喜欢咖啡", "用户喜欢乌龙茶"
+        }
+
+        store.replace_by_id(
+            path, "coffee", "用户喜欢浓缩咖啡",
+            {"type": "preference", "id": "coffee"},
+        )
+        sync_changed_index(db, store, identity_id)
+        edited_memory = next(
+            item for item in MemoryRepository().list_owned(db, identity_id)
+            if item.entry_key == "coffee"
+        )
+        assert edited_memory.content == "用户喜欢浓缩咖啡"
+        assert edited_memory.trust == "imported"
+        assert edited_memory.source_kind == "import"
+        assert edited_memory.source_message_id is None

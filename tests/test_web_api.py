@@ -81,8 +81,13 @@ def make_client(tmp_path):
 def test_web_chat_stream_and_shared_conversation(tmp_path):
     client, _sessions, _store, provider_id, model_name = make_client(tmp_path)
     with client:
-        assert client.get("/").status_code == 200
-        assert "知语" in client.get("/").text
+        page = client.get("/")
+        assert page.status_code == 200
+        assert "知语" in page.text
+        assert 'id="root"' in page.text
+        assert '/react/app.js' in page.text
+        assert client.get("/react/app.js").status_code == 200
+        assert client.get("/react/app.css").status_code == 200
         health = client.get("/api/health").json()
         assert health["started"] is True
 

@@ -7,6 +7,7 @@
 """
 
 import asyncio
+import json
 import logging
 from datetime import timedelta
 from uuid import uuid4
@@ -14,7 +15,7 @@ from uuid import uuid4
 from sqlalchemy import select
 
 from zhiyu.core.memory.consolidation import apply_consolidation, propose
-from zhiyu.core.memory.indexer import rebuild_index
+from zhiyu.core.memory.indexer import sync_changed_index
 from zhiyu.core.memory.retriever import build_query_plan, _lexical_similarity
 from zhiyu.core.memory.store import MemoryStore
 from zhiyu.core.providers.router import provider_router
@@ -51,7 +52,7 @@ class ConsolidationProcessor:
     ) -> dict:
         with self.session_factory() as db:
             identity_id = identity_id or IdentityRepository().local(db).id
-            rebuild_index(db, self.store, identity_id)
+            sync_changed_index(db, self.store, identity_id)
             pending = self._pending(db, identity_id)
             if not pending:
                 return {"status": "skipped", "pending": 0}
@@ -67,16 +68,22 @@ class ConsolidationProcessor:
             provider_config, model = self._default_provider_model(db)
             core = MemoryRepository().list_owned(db, identity_id, tier="core", statuses=("active",))
 
-        client = provider_router.get_provider(provider_config)
-        operations = await propose(client, model.model_name, candidates, core)
-
-        with self.session_factory() as db:
-            stats = apply_consolidation(
-                db, self.store, identity_id, operations, dry_run=dry_run
-            )
-            self._record_run(
-                db, identity_id, stats, "dry_run" if dry_run else "applied"
-            )
+        try:
+            client = provider_router.get_provider(provider_config)
+            operations = await propose(client, model.model_name, candidates, core)
+            with self.session_factory() as db:
+                stats = apply_consolidation(
+                    db, self.store, identity_id, operations, dry_run=dry_run
+                )
+                self._record_run(
+                    db, identity_id, stats, "dry_run" if dry_run else "applied"
+                )
+        except Exception as exc:
+            with self.session_factory() as db:
+                self._record_run(
+                    db, identity_id, {"last_error": str(exc)}, "failed"
+                )
+            raise
         return {"status": "ok", **stats}
 
     async def run_due(self, *, dry_run: bool = False) -> dict[str, dict]:
@@ -186,6 +193,8 @@ class ConsolidationProcessor:
 
     @staticmethod
     def _independent(left: Memory, right: Memory) -> bool:
+        if left.source_message_id and right.source_message_id:
+            return left.source_message_id != right.source_message_id
         if left.conversation_id and right.conversation_id:
             return left.conversation_id != right.conversation_id
         left_time = left.observed_at or left.created_at
@@ -240,12 +249,16 @@ class ConsolidationProcessor:
                 merged_count=stats.get("merged_count", 0),
                 superseded_count=stats.get("superseded_count", 0),
                 skipped_count=stats.get("skipped_count", 0),
-                summary=(
+                details_json=json.dumps(
+                    stats.get("decisions", []), ensure_ascii=False
+                ),
+                summary=stats.get("last_error") or (
                     f"候选 {stats.get('candidate_count', 0)}："
                     f"晋升 {stats.get('promoted_count', 0)}，"
                     f"替换 {stats.get('superseded_count', 0)}，"
-                    f"忽略 {stats.get('skipped_count', 0)}"
+                    f"暂缓 {stats.get('deferred_count', 0)}"
                 ),
+                last_error=stats.get("last_error"),
                 finished_at=utcnow(),
             )
         )

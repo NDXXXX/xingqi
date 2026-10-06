@@ -23,7 +23,7 @@ from zhiyu.core.agent.context import build_tool_registry, with_agent_context_asy
 from zhiyu.core.agent.run_manager import active_runs
 from zhiyu.core.agent.runtime import run_agent, run_agent_stream
 from zhiyu.core.memory.manager import MemoryManager
-from zhiyu.core.memory.indexer import rebuild_index
+from zhiyu.core.memory.indexer import sync_changed_index
 from zhiyu.application.memory_jobs import MemoryJobProcessor
 from zhiyu.application.providers import PROVIDER_FALLBACKS_KEY
 from zhiyu.core.providers.base import AIProvider
@@ -33,6 +33,9 @@ from zhiyu.infrastructure.database.db import SessionLocal
 from zhiyu.infrastructure.database.models import AgentRun, Conversation, Message, utcnow
 from zhiyu.infrastructure.database.repositories.agent_run_repository import AgentRunRepository
 from zhiyu.infrastructure.database.repositories.conversation_repository import ConversationRepository
+from zhiyu.infrastructure.database.repositories.conversation_summary_repository import (
+    ConversationSummaryRepository,
+)
 from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository
 from zhiyu.infrastructure.database.repositories.message_repository import MessageRepository
 from zhiyu.infrastructure.database.repositories.memory_job_repository import MemoryJobRepository
@@ -171,7 +174,7 @@ class ChatService:
         memory_manager = self.memory_processor.memory_manager
         if isinstance(memory_manager, MemoryManager) and conversation.identity_id:
             try:
-                rebuild_index(db, memory_manager.store, conversation.identity_id)
+                sync_changed_index(db, memory_manager.store, conversation.identity_id)
             except Exception as exc:
                 db.rollback()
                 logger.warning("memory index recovery degraded: %s", exc)
@@ -214,13 +217,30 @@ class ChatService:
                     source_event_id=request.channel_event_id,
                 )
 
-        history = self.messages.list_by_conversation(db, conversation.id)
+        summary = ConversationSummaryRepository().get(db, conversation.id)
+        if (
+            summary is not None
+            and summary.last_message_id
+            and summary.last_message_created_at
+        ):
+            history = self.messages.list_after(
+                db,
+                conversation.id,
+                summary.last_message_created_at,
+                summary.last_message_id,
+            )
+        else:
+            # Legacy summaries have no reliable message boundary; rebuild from
+            # the complete transcript once and replace them with a checkpoint.
+            history = self.messages.list_by_conversation(db, conversation.id)
         llm_messages = [
             {
                 "role": item.role,
                 "content": self._llm_content(
                     item.content, item.parts_json, supports_vision=model_config.supports_vision
                 ),
+                "_zhiyu_message_id": item.id,
+                "_zhiyu_created_at": item.created_at,
             }
             for item in history
         ]
@@ -233,6 +253,11 @@ class ChatService:
             model_config.max_output_tokens,
             recall=None,
         )
+        db.commit()
+        llm_messages = [
+            {key: value for key, value in item.items() if not key.startswith("_zhiyu_")}
+            for item in llm_messages
+        ]
         if request.system_prompt:
             llm_messages = [
                 {"role": "system", "content": request.system_prompt},

@@ -9,9 +9,11 @@ from uuid import uuid4
 from sqlalchemy import func, select
 
 from zhiyu.core.memory.extractor import MEMORY_TYPES
-from zhiyu.core.memory.indexer import rebuild_index
+from zhiyu.core.memory.freshness import needs_confirmation
+from zhiyu.core.memory.indexer import sync_changed_index
 from zhiyu.core.memory.mutations import FileMutationManager
 from zhiyu.core.memory.retriever import derive_trigger_text, hybrid_rank
+from zhiyu.core.memory.safety import contains_secret
 from zhiyu.core.memory.store import MemoryStore
 from zhiyu.core.providers.embedding import embed_and_store
 from zhiyu.core.providers.embedding import load_config as load_embedding_config
@@ -46,10 +48,32 @@ class MemorySummary:
     source_conversation_id: str | None
     supersedes_id: str | None
     file_path: str | None
+    promotion_status: str
+    promoted_to_id: str | None
+    last_evidence_at: str | None
+    confirmation_status: str
+    sources: list[dict]
 
 
 def _summary(db, memory) -> MemorySummary:
     source = db.get(Message, memory.source_message_id) if memory.source_message_id else None
+    sources = []
+    for link in db.scalars(
+        select(MemorySource)
+        .where(MemorySource.memory_id == memory.id)
+        .order_by(MemorySource.observed_at)
+    ):
+        source_message = db.get(Message, link.source_message_id) if link.source_message_id else None
+        source_memory = db.get(Memory, link.source_memory_id) if link.source_memory_id else None
+        sources.append(
+            {
+                "content": source_message.content if source_message else source_memory.content if source_memory else None,
+                "conversation_id": link.conversation_id,
+                "observed_at": link.observed_at.isoformat() if link.observed_at else None,
+                "source_kind": link.source_kind,
+                "trust": link.trust,
+            }
+        )
     return MemorySummary(
         id=memory.id,
         type=memory.type,
@@ -63,6 +87,13 @@ def _summary(db, memory) -> MemorySummary:
         source_conversation_id=source.conversation_id if source is not None else None,
         supersedes_id=memory.supersedes_id,
         file_path=memory.file_path,
+        promotion_status=memory.promotion_status,
+        promoted_to_id=memory.promoted_to_id,
+        last_evidence_at=(memory.last_evidence_at or memory.observed_at).isoformat()
+        if (memory.last_evidence_at or memory.observed_at)
+        else None,
+        confirmation_status="needs_confirmation" if needs_confirmation(memory) else "current",
+        sources=sources,
     )
 
 
@@ -83,6 +114,9 @@ class MemoryService:
             return [
                 _summary(db, item)
                 for item in self.memories.list_owned(db, identity_id, statuses=statuses, tier=tier)
+                if include_inactive
+                or item.tier == "core"
+                or item.promotion_status in {"pending", "deferred"}
             ]
 
     def search(
@@ -113,6 +147,12 @@ class MemoryService:
             memories = [
                 *self.memories.list_visible(db, identity_id, tier="core"),
                 *self.memories.list_owned(db, identity_id, tier="episodic"),
+            ]
+            memories = [
+                item
+                for item in memories
+                if item.promotion_status not in {"promoted", "rejected", "deferred"}
+                and not needs_confirmation(item)
             ]
             trace = hybrid_rank(db, query, memories)
             return {
@@ -183,6 +223,112 @@ class MemoryService:
             memory = self._create_core(db, identity_id, memory_type, normalized)
             db.commit()
             return _summary(db, memory)
+
+    def confirm(self, memory_id: str) -> MemorySummary:
+        with self.session_factory() as db:
+            identity_id = self.identities.local(db).id
+            memory = self.memories.get_owned(db, identity_id, memory_id)
+            if memory is None or memory.status != "active" or memory.type not in {"goal", "project"}:
+                raise ValueError("只能确认有效的目标或项目")
+            memory.last_evidence_at = utcnow()
+            db.commit()
+            return _summary(db, memory)
+
+    def keep(self, memory_id: str) -> MemorySummary:
+        with self.session_factory() as db:
+            identity_id = self.identities.local(db).id
+            source = self.memories.get_owned(db, identity_id, memory_id)
+            if (
+                source is None
+                or source.tier != "episodic"
+                or source.status != "active"
+                or source.promotion_status == "promoted"
+            ):
+                raise ValueError("只能保留有效的情景记忆")
+            existing = next(
+                (
+                    item
+                    for item in self.memories.list_owned(
+                        db, identity_id, tier="core", statuses=("active",)
+                    )
+                    if item.type == source.type and item.content == source.content
+                ),
+                None,
+            )
+            if existing is not None:
+                self.memories.update(
+                    db, source, promotion_status="promoted", promoted_to_id=existing.id
+                )
+                linked = db.scalars(
+                    select(MemorySource.id).where(
+                        MemorySource.identity_id == identity_id,
+                        MemorySource.memory_id == existing.id,
+                        MemorySource.source_memory_id == source.id,
+                    )
+                ).first()
+                if linked is None:
+                    db.add(
+                        MemorySource(
+                            id=str(uuid4()), memory_id=existing.id,
+                            identity_id=identity_id, source_memory_id=source.id,
+                            source_message_id=source.source_message_id,
+                            conversation_id=source.conversation_id, trust="owner",
+                            source_kind="manual", observed_at=source.observed_at,
+                        )
+                    )
+                db.commit()
+                return _summary(db, existing)
+            path = self.store.path_for(source.type, identity_id)
+            entry, mutation = self.mutations.append(
+                db,
+                identity_id,
+                path,
+                source.content,
+                meta={"type": source.type},
+                context={
+                    "origin": "manual",
+                    "tier": "core",
+                    "trust": "owner",
+                    "source_kind": "manual",
+                    "source_memory_ids": [source.id],
+                },
+            )
+            core = self.memories.create(
+                db,
+                type=source.type,
+                content=entry.content,
+                identity_id=identity_id,
+                origin="manual",
+                tier="core",
+                trust="owner",
+                source_kind="manual",
+                trigger_text=derive_trigger_text(entry.content),
+                file_path=self.store.relative_path(path),
+                line_start=entry.line_start,
+                line_end=entry.line_end,
+                content_hash=entry.hash,
+                entry_key=entry.id,
+            )
+            self.memories.update(
+                db, source, promotion_status="promoted", promoted_to_id=core.id
+            )
+            db.add(
+                MemorySource(
+                    id=str(uuid4()),
+                    memory_id=core.id,
+                    identity_id=identity_id,
+                    source_memory_id=source.id,
+                    source_message_id=source.source_message_id,
+                    conversation_id=source.conversation_id,
+                    trust="owner",
+                    source_kind="manual",
+                    observed_at=source.observed_at,
+                )
+            )
+            embed_and_store(db, core.id, core.content)
+            self.mutations.complete(db, mutation)
+            db.commit()
+            return _summary(db, core)
 
     def edit(self, memory_id: str, *, content: str) -> MemorySummary:
         with self.session_factory() as db:
@@ -354,8 +500,8 @@ class MemoryService:
                             "action": "delete",
                         }
                         for core in orphaned_cores
-                    ],
-                }
+                ],
+            }
 
             conversation = db.get(Conversation, conversation_id)
             if conversation is None or conversation.identity_id != identity_id:
@@ -428,6 +574,35 @@ class MemoryService:
                 "entries": entries,
                 "tombstone": True,
             }
+
+    def consolidation_runs(self, limit: int = 5) -> list[dict]:
+        from zhiyu.infrastructure.database.models import MemoryConsolidationRun
+
+        with self.session_factory() as db:
+            identity_id = self.identities.local(db).id
+            rows = db.scalars(
+                select(MemoryConsolidationRun)
+                .where(MemoryConsolidationRun.identity_id == identity_id)
+                .order_by(MemoryConsolidationRun.created_at.desc())
+                .limit(limit)
+            )
+            return [
+                {
+                    "id": item.id,
+                    "status": item.status,
+                    "candidate_count": item.candidate_count,
+                    "promoted_count": item.promoted_count,
+                    "merged_count": item.merged_count,
+                    "superseded_count": item.superseded_count,
+                    "skipped_count": item.skipped_count,
+                    "summary": item.summary,
+                    "details": item.details_json,
+                    "last_error": item.last_error,
+                    "created_at": item.created_at.isoformat() if item.created_at else None,
+                    "finished_at": item.finished_at.isoformat() if item.finished_at else None,
+                }
+                for item in rows
+            ]
 
     def forget_conversation(self, conversation_id: str) -> int:
         """删除某会话派生的情景观察，并记录遗忘墓碑。返回删除条数。"""
@@ -611,7 +786,7 @@ class MemoryService:
         return None
 
     def _sync(self, db, identity_id: str) -> None:
-        rebuild_index(db, self.store, identity_id)
+        sync_changed_index(db, self.store, identity_id)
 
     def _orphaned_cores_after_removal(
         self, db, identity_id: str, removing: list[MemorySource]
@@ -644,4 +819,6 @@ class MemoryService:
             raise ValueError("记忆内容不能为空")
         if len(normalized) > 500:
             raise ValueError("记忆内容不能超过 500 字符")
+        if contains_secret(normalized):
+            raise ValueError("密码、验证码、API Key、手机号等敏感信息不能保存在普通记忆中")
         return memory_type, normalized

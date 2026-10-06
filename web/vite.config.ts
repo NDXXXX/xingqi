@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { resolve } from "node:path";
 
 export default defineConfig({
   base: "/react/",
@@ -8,15 +9,15 @@ export default defineConfig({
   build: {
     outDir: "../src/zhiyu/web/static/react",
     emptyOutDir: true,
-    lib: {
-      entry: "src/dialogHost.tsx",
-      formats: ["es"],
-      fileName: "dialogHost",
-    },
     rollupOptions: {
+      input: {
+        dialogHost: resolve(import.meta.dirname, "src/dialogHost.tsx"),
+        app: resolve(import.meta.dirname, "src/app.tsx"),
+      },
       output: {
-        inlineDynamicImports: true,
-        assetFileNames: "dialogHost.[ext]",
+        entryFileNames: "[name].js",
+        chunkFileNames: "assets/[name]-[hash].js",
+        assetFileNames: "[name][extname]",
       },
     },
   },

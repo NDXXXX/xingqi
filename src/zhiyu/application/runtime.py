@@ -3,6 +3,8 @@
 import asyncio
 import logging
 
+from sqlalchemy import select
+
 from zhiyu.application.chat import ChatService
 from zhiyu.application.channels import ChannelService
 from zhiyu.application.mcp import CONFIG_REVISION_KEY, McpService
@@ -13,6 +15,10 @@ from zhiyu.channels.router import ChannelRouter
 from zhiyu.integrations.mcp.manager import McpManager
 from zhiyu.integrations.skills.registry import SkillRegistry, default_registry
 from zhiyu.infrastructure.database.repositories.setting_repository import SettingRepository
+from zhiyu.infrastructure.database.models import Identity, MemoryFileIndex, MemoryMutation
+from zhiyu.core.memory.indexer import rebuild_index, sync_changed_index
+from zhiyu.core.memory.store import MemoryStore
+from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository
 
 
 logger = logging.getLogger(__name__)
@@ -66,6 +72,7 @@ class RuntimeHost:
         self.skill_service.register_existing()
         self.skill_registry.reload(self.skill_service.enabled_overrides())
         self.skill_service.purge_expired()
+        self._sync_memory_indexes()
         if self.auto_connect_mcp and hasattr(self.mcp_manager, "reconcile"):
             await self._reconcile_integrations()
         if self.auto_connect_channels:
@@ -81,6 +88,38 @@ class RuntimeHost:
             self._integration_task = asyncio.create_task(self._integration_loop())
         if getattr(type(self.channel_manager), "recover_once", None) is not None:
             self._recovery_task = asyncio.create_task(self._recovery_loop())
+
+    def _sync_memory_indexes(self) -> None:
+        memory_manager = self.chat_service.memory_processor.memory_manager
+        store = getattr(memory_manager, "store", None) or MemoryStore()
+        try:
+            with self.chat_service.session_factory() as db:
+                IdentityRepository().local(db)
+                identity_ids = list(db.scalars(select(Identity.id)))
+                for identity_id in identity_ids:
+                    has_snapshot = db.scalars(
+                        select(MemoryFileIndex.id).where(
+                            MemoryFileIndex.identity_id == identity_id
+                        )
+                    ).first() is not None
+                    has_incomplete_mutation = db.scalars(
+                        select(MemoryMutation.id).where(
+                            MemoryMutation.identity_id == identity_id,
+                            MemoryMutation.status.in_(("prepared", "file_applied")),
+                        )
+                    ).first() is not None
+                    try:
+                        if not has_snapshot or has_incomplete_mutation:
+                            rebuild_index(db, store, identity_id)
+                        else:
+                            sync_changed_index(db, store, identity_id)
+                    except Exception:
+                        db.rollback()
+                        logger.exception(
+                            "Memory index startup recovery failed for %s", identity_id
+                        )
+        except Exception:
+            logger.exception("Memory index startup recovery failed")
 
     async def stop(self) -> None:
         if not self.started:

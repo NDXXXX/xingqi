@@ -62,6 +62,8 @@ class ConversationSummary(Base):
     )
     content: Mapped[str] = mapped_column(Text)
     source_message_count: Mapped[int] = mapped_column(Integer)
+    last_message_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    last_message_created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -146,6 +148,7 @@ class Memory(Base):
     trust: Mapped[str] = mapped_column(String(16), default="agent")
     source_kind: Mapped[str] = mapped_column(String(16), default="message")
     observed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    last_evidence_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     supersession_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     trigger_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     promotion_status: Mapped[str] = mapped_column(String(16), default="none")
@@ -162,6 +165,24 @@ class Memory(Base):
     entry_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class MemoryFileIndex(Base):
+    __tablename__ = "memory_file_indexes"
+    __table_args__ = (
+        UniqueConstraint("identity_id", "file_path", name="uq_memory_file_index_identity_path"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    identity_id: Mapped[str] = mapped_column(
+        ForeignKey("identities.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    file_path: Mapped[str] = mapped_column(String(255), nullable=False)
+    file_size: Mapped[int] = mapped_column(Integer, default=0)
+    mtime_ns: Mapped[int] = mapped_column(Integer, default=0)
+    content_hash: Mapped[str] = mapped_column(String(64))
+    indexed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class MemoryJob(Base):
@@ -207,6 +228,7 @@ class MemoryConsolidationRun(Base):
     superseded_count: Mapped[int] = mapped_column(Integer, default=0)
     skipped_count: Mapped[int] = mapped_column(Integer, default=0)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    details_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

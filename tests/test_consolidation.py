@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from datetime import timedelta
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -9,6 +10,7 @@ from sqlalchemy.pool import StaticPool
 
 from zhiyu.application.consolidation_jobs import ConsolidationProcessor
 from zhiyu.core.memory.consolidation import apply_consolidation, parse_consolidation
+from zhiyu.core.memory.manager import MemoryManager
 from zhiyu.core.memory.store import MemoryStore
 from zhiyu.core.providers.base import AIProvider, LLMResponse
 from zhiyu.infrastructure.database import models  # noqa: F401
@@ -17,6 +19,8 @@ from zhiyu.infrastructure.database.repositories.conversation_repository import C
 from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository
 from zhiyu.infrastructure.database.repositories.memory_repository import MemoryRepository
 from zhiyu.infrastructure.database.repositories.provider_repository import ProviderRepository
+from zhiyu.infrastructure.database.models import utcnow
+from zhiyu.core.memory.freshness import needs_confirmation
 
 
 def _database():
@@ -148,6 +152,26 @@ def test_apply_supersedes_old_core(tmp_path):
         assert "用户已戒咖啡" in text
 
 
+def test_goal_promotion_preserves_last_evidence_time(tmp_path):
+    factory = _database()
+    store = MemoryStore(tmp_path)
+    with factory() as db:
+        identity_id = IdentityRepository().local(db).id
+        candidate = _candidate(db, identity_id, "goal", "用户准备三个月内学会 Rust")
+        candidate.observed_at = utcnow() - timedelta(days=100)
+        db.flush()
+        stats = apply_consolidation(
+            db, store, identity_id,
+            [{
+                "action": "add_core", "candidate_ids": [candidate.id],
+                "type": "goal", "content": candidate.content, "importance": 7,
+            }],
+        )
+        core = MemoryRepository().get(db, stats["core_ids"][0])
+        assert core.last_evidence_at == candidate.observed_at
+        assert needs_confirmation(core)
+
+
 def test_apply_ignores_candidates(tmp_path):
     factory = _database()
     store = MemoryStore(tmp_path)
@@ -164,8 +188,44 @@ def test_apply_ignores_candidates(tmp_path):
         )
 
         assert stats["skipped_count"] == 1
-        assert MemoryRepository().get(db, candidate.id).promotion_status == "rejected"
+        assert MemoryRepository().get(db, candidate.id).promotion_status == "deferred"
         assert MemoryRepository().list_owned(db, identity_id, tier="core") == []
+
+
+def test_new_independent_observation_reopens_deferred_candidate(tmp_path):
+    factory = _database()
+    store = MemoryStore(tmp_path)
+    with factory() as db:
+        identity_id = IdentityRepository().local(db).id
+        first_conversation = ConversationRepository().create(
+            db, title="one", channel="local", identity_id=identity_id
+        )
+        second_conversation = ConversationRepository().create(
+            db, title="two", channel="local", identity_id=identity_id
+        )
+        first_message = models.Message(
+            id="first-message", conversation_id=first_conversation.id,
+            role="user", content="我正在学习 Rust",
+        )
+        second_message = models.Message(
+            id="second-message", conversation_id=second_conversation.id,
+            role="user", content="我继续学习 Rust",
+        )
+        db.add_all([first_message, second_message])
+        deferred = _candidate(db, identity_id, "goal", "用户正在学习 Rust")
+        deferred.promotion_status = "deferred"
+        deferred.source_message_id = first_message.id
+        deferred.conversation_id = first_conversation.id
+        fresh = _candidate(db, identity_id, "goal", "用户继续学习 Rust")
+        fresh.source_message_id = second_message.id
+        fresh.conversation_id = second_conversation.id
+        db.flush()
+
+        MemoryManager(store)._reopen_related_candidates(
+            db, identity_id, fresh, {"type": "goal", "content": fresh.content}
+        )
+
+        assert deferred.promotion_status == "pending"
 
 
 def test_apply_rejects_invalid_candidate(tmp_path):

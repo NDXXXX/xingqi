@@ -13,6 +13,18 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install frontend dependencies
+        run: npm ci --prefix web
+      - name: Frontend checks
+        run: |
+          npm --prefix web run typecheck
+          npm --prefix web test
+          npm --prefix web run build
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true

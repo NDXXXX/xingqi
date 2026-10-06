@@ -13,7 +13,7 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from zhiyu.infrastructure.database.models import Memory, MemoryMutation, utcnow
+from zhiyu.infrastructure.database.models import Memory, MemoryFileIndex, MemoryMutation, utcnow
 from .store import Entry, MemoryStore, content_hash, file_hash
 
 
@@ -89,6 +89,27 @@ class FileMutationManager:
         return entry, mutation
 
     def complete(self, db: Session, mutation: MemoryMutation) -> None:
+        path = self.store.resolve_relative(mutation.relative_path)
+        if path.exists():
+            stat = path.stat()
+            indexed = db.scalars(
+                select(MemoryFileIndex).where(
+                    MemoryFileIndex.identity_id == mutation.identity_id,
+                    MemoryFileIndex.file_path == mutation.relative_path,
+                )
+            ).first()
+            if indexed is None:
+                indexed = MemoryFileIndex(
+                    id=str(uuid4()),
+                    identity_id=mutation.identity_id,
+                    file_path=mutation.relative_path,
+                )
+                db.add(indexed)
+            indexed.file_size = stat.st_size
+            indexed.mtime_ns = stat.st_mtime_ns
+            indexed.content_hash = file_hash(path.read_text(encoding="utf-8"))
+            indexed.indexed_at = utcnow()
+            indexed.last_error = None
         mutation.status = "completed"
         mutation.updated_at = utcnow()
         db.flush()

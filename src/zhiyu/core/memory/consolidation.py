@@ -30,12 +30,13 @@ _PROMPT = """你是记忆巩固器。从情景观察里挑出真正稳定、反�
 - 只有被多次观察、或明显代表用户稳定状态/偏好的信息才晋升；一次性、试探性、不确定的表达一律 ignore。
 - add_core：把一个或多个表达同一事实的候选合并成一条新的核心记忆。
 - supersede_core：当候选更新或推翻了某条已有核心记忆时，替换它（target_id 指向旧核心）。
+- ignore：本轮证据不足时暂缓，未来有新的独立相关观察后可以重新评估；给出简短原因。
 - 只能引用下面给出的候选 id 与核心 id，不能编造。每个候选最多出现在一项操作里。
 - importance 取 1–10（10 最重要）。
 - 只返回 JSON 数组，格式：
   {{"action":"add_core","candidate_ids":["..."],"type":"...","content":"...","importance":8}}
   {{"action":"supersede_core","target_id":"...","candidate_ids":["..."],"type":"...","content":"...","importance":8}}
-  {{"action":"ignore","candidate_ids":["..."]}}
+  {{"action":"ignore","candidate_ids":["..."],"reason":"证据不足"}}
 
 候选情景观察：
 {candidates}
@@ -89,6 +90,9 @@ def parse_consolidation(text: str) -> list[dict]:
         if action not in CONSOLIDATION_ACTIONS:
             return []
         operation = {"action": action}
+        reason = str(item.get("reason", "")).strip()
+        if reason:
+            operation["reason"] = reason[:300]
         candidate_ids = item.get("candidate_ids", [])
         if not isinstance(candidate_ids, list) or not candidate_ids:
             return []
@@ -146,7 +150,9 @@ def apply_consolidation(
         "superseded_count": 0,
         "skipped_count": 0,
         "merged_count": 0,
+        "deferred_count": 0,
         "core_ids": [],
+        "decisions": [],
     }
 
     candidates = _load_candidates(db, repo, identity_id, operations)
@@ -171,7 +177,15 @@ def apply_consolidation(
     for operation in operations:
         if operation["action"] == "ignore":
             for candidate_id in operation["candidate_ids"]:
-                repo.update(db, candidates[candidate_id], promotion_status="rejected")
+                repo.update(db, candidates[candidate_id], promotion_status="deferred")
+                stats["decisions"].append(
+                    {
+                        "candidate_id": candidate_id,
+                        "decision": "deferred",
+                        "reason": operation.get("reason", "本轮证据不足"),
+                    }
+                )
+                stats["deferred_count"] += 1
             continue
 
         if operation["action"] == "supersede_core":
@@ -211,6 +225,15 @@ def apply_consolidation(
         applied_mutations.append(mutation)
         stats["core_ids"].append(core.id)
         stats["promoted_count"] += 1
+        stats["decisions"].append(
+            {
+                "candidate_ids": list(operation["candidate_ids"]),
+                "decision": operation["action"],
+                "content": operation["content"],
+                "target_id": operation.get("target_id"),
+                "reason": operation.get("reason", "达到沉淀条件"),
+            }
+        )
 
     for mutation in applied_mutations:
         mutations.complete(db, mutation)
@@ -295,6 +318,14 @@ def _create_core(db, repo, store, mutations, identity_id, operation, candidates)
         content_hash=entry.hash,
         entry_key=entry.id,
     )
+    if operation["type"] in {"goal", "project"}:
+        evidence_times = [
+            candidates[candidate_id].observed_at
+            for candidate_id in operation["candidate_ids"]
+            if candidates[candidate_id].observed_at is not None
+        ]
+        if evidence_times:
+            core.last_evidence_at = max(evidence_times)
     embed_and_store(db, core.id, core.content)
     for candidate_id in operation["candidate_ids"]:
         candidate = candidates[candidate_id]

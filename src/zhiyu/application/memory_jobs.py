@@ -4,7 +4,7 @@ import asyncio
 import logging
 
 from zhiyu.core.memory.deep_recall import is_forgotten
-from zhiyu.core.memory.indexer import rebuild_index
+from zhiyu.core.memory.indexer import sync_changed_index
 from zhiyu.core.memory.manager import MemoryManager
 from zhiyu.core.providers.router import ProviderRouter, provider_router
 from zhiyu.infrastructure.database.db import SessionLocal
@@ -161,7 +161,7 @@ class MemoryJobProcessor:
                 raise ValueError("任务对应的 Provider 凭据不可用")
             with self.session_factory() as db:
                 if isinstance(self.memory_manager, MemoryManager):
-                    rebuild_index(
+                    sync_changed_index(
                         db, self.memory_manager.store, data["identity_id"]
                     )
                 if not self.memories.has_source_action(

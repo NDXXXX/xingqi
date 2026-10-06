@@ -85,6 +85,9 @@ function DialogHost() {
   function finish(result: DialogResult) {
     active?.resolve(result);
     setActive(null);
+    setValue("");
+    setFormValues({});
+    setFormError("");
   }
 
   return <>

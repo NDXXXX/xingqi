@@ -15,6 +15,8 @@ class ConversationSummaryRepository:
         conversation_id: str,
         content: str,
         source_message_count: int,
+        last_message_id: str | None = None,
+        last_message_created_at=None,
     ) -> ConversationSummary:
         summary = self.get(db, conversation_id)
         if summary is None:
@@ -22,11 +24,15 @@ class ConversationSummaryRepository:
                 conversation_id=conversation_id,
                 content=content,
                 source_message_count=source_message_count,
+                last_message_id=last_message_id,
+                last_message_created_at=last_message_created_at,
             )
             db.add(summary)
         else:
             summary.content = content
             summary.source_message_count = source_message_count
+            summary.last_message_id = last_message_id
+            summary.last_message_created_at = last_message_created_at
             summary.updated_at = utcnow()
         db.flush()
         return summary

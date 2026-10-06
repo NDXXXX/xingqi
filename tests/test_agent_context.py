@@ -5,6 +5,8 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import zhiyu.core.agent.context as context_module
+from datetime import timedelta
+from types import SimpleNamespace
 from zhiyu.core.agent.context import (
     build_tool_registry,
     compact_messages,
@@ -16,6 +18,7 @@ from zhiyu.infrastructure.database.db import Base
 from zhiyu.infrastructure.database.repositories.character_repository import CharacterRepository
 from zhiyu.infrastructure.database.repositories.conversation_repository import ConversationRepository
 from zhiyu.infrastructure.database.repositories.memory_repository import MemoryRepository
+from zhiyu.core.memory.freshness import needs_confirmation
 from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository
 from zhiyu.integrations.skills.registry import SkillRegistry
 
@@ -28,6 +31,44 @@ def _session():
 
 def test_build_tool_registry_contains_builtins():
     assert set(build_tool_registry().names()) >= {"calculator", "datetime"}
+
+
+def test_goal_requires_confirmation_after_ninety_days():
+    from zhiyu.infrastructure.database.models import utcnow
+
+    now = utcnow()
+    memory = SimpleNamespace(
+        type="goal", tier="core", status="active", observed_at=now - timedelta(days=89),
+        last_evidence_at=None, created_at=now - timedelta(days=89),
+    )
+    assert not needs_confirmation(memory, now)
+    memory.observed_at = now - timedelta(days=90)
+    memory.created_at = memory.observed_at
+    assert needs_confirmation(memory, now)
+
+
+def test_stale_goal_is_recalled_as_historical_not_current():
+    from zhiyu.infrastructure.database.models import utcnow
+
+    db = _session()
+    identity = IdentityRepository().local(db)
+    conversation = ConversationRepository().create(
+        db, title="stale goal", channel="local", identity_id=identity.id
+    )
+    memory = MemoryRepository().create(
+        db, type="goal", content="用户计划在三个月内学会 Rust",
+        identity_id=identity.id, tier="core", trust="owner",
+    )
+    memory.observed_at = utcnow() - timedelta(days=90)
+    db.flush()
+
+    messages = with_agent_context(
+        db, conversation, "我之前计划学会 Rust，现在怎么样？",
+        [{"role": "user", "content": "我之前计划学会 Rust，现在怎么样？"}],
+    )
+
+    assert any("待确认的旧目标/项目" in item["content"] for item in messages)
+    db.close()
 
 
 def test_with_agent_context_injects_character_and_memory():
@@ -118,6 +159,33 @@ def test_context_compaction_persists_derived_summary():
     assert summary is not None
     assert "很早" in summary.content
     assert summary.source_message_count == 2
+    db.close()
+
+
+def test_context_checkpoint_records_last_compacted_message_boundary():
+    db = _session()
+    identity = IdentityRepository().local(db)
+    conversation = ConversationRepository().create(
+        db, title="checkpoint", channel="local", identity_id=identity.id
+    )
+    from zhiyu.infrastructure.database.models import utcnow
+
+    created = utcnow()
+    history = [
+        {"role": "user", "content": "很早的问题" * 50, "_zhiyu_message_id": "u1", "_zhiyu_created_at": created},
+        {"role": "assistant", "content": "很早的回答" * 50, "_zhiyu_message_id": "a1", "_zhiyu_created_at": created},
+        {"role": "user", "content": "当前问题", "_zhiyu_message_id": "u2", "_zhiyu_created_at": created},
+    ]
+
+    with_agent_context(
+        db, conversation, "当前问题", history,
+        context_window=420, max_output_tokens=100,
+    )
+
+    summary = db.get(models.ConversationSummary, conversation.id)
+    assert summary is not None
+    assert summary.last_message_id == "a1"
+    assert summary.last_message_created_at == created
     db.close()
 
 

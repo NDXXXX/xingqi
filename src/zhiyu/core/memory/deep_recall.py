@@ -36,6 +36,9 @@ def deep_recall(
     episodic = MemoryRepository().list_owned(
         db, identity_id, tier="episodic", statuses=("active",)
     )
+    episodic = [
+        item for item in episodic if item.promotion_status not in {"promoted", "rejected", "deferred"}
+    ]
     hits = retrieve(query, episodic, top_k=3)
     if hits:
         parts.append("相关历史观察：\n" + "\n".join(f"- {item.content}" for item in hits))

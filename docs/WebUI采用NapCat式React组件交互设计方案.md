@@ -1,45 +1,46 @@
-# 知语整体架构整理与 NapCat 式 WebUI 重构设计方案
+# 知语 WebUI 全量 React 迁移与体验修复设计方案
 
-> 版本：v1.1  
-> 日期：2026-10-06  
-> 状态：实施中  
-> 范围：在不推倒重写业务的前提下，整理知语前后端模块边界，并将 WebUI 从原生 HTML/CSS/JavaScript 升级为 React 组件化前端。保留单体部署、FastAPI API、数据库和用户配置。
+> 版本：v1.2
+> 日期：2026-10-07
+> 状态：主要功能已迁移，浏览器验收与模块拆分待补
+> 范围：解决“只有弹窗使用 React、页面主体仍是旧 HTML/JavaScript，且总览/聊天状态存在逻辑风险”的问题。保留 FastAPI、现有 API、数据库、用户配置和单机部署方式。
 
 ## 1. 背景与目标
 
-NapCat WebUI 是一个由 React 驱动的单页应用：服务端返回应用入口，浏览器挂载前端根节点；页面由组件渲染，通过路由切换，通过 HTTP API 与后端交互，并以 SSE 接收实时状态。其配置弹窗使用统一的暗色面板、模糊遮罩、分组表单、自定义开关和明确的取消/保存操作。
+NapCat WebUI 的参考价值不只是弹窗样式，而是页面、表单、状态和路由都由组件统一管理。知语可以借鉴其侧栏导航、页面层级、分组表单、运行状态反馈和一致的弹窗交互，不复制其品牌素材或整套产品信息架构。
 
-知语当前前端是 FastAPI 托管的静态 HTML、CSS 和原生 JavaScript。它已有 Provider、MCP、Skills 等管理能力，但交互仍混用原生 `prompt`、`confirm`、`alert` 与少量 `<dialog>`，造成风格和表单体验不一致。
+知语原先只将弹窗接入 React，导航、总览、聊天和管理页面仍由旧 HTML 与 `app.js` 渲染，因此整体页面看不到明显变化。实施中已将完整 Shell 与八个页面迁入 React，并移除旧 `app.js`；总览状态误报和聊天会话切换竞态也已针对性修复。
 
-后端已经按 `api / application / core / infrastructure / channels / integrations` 分目录，但实际依赖没有完全遵循这些边界：入口文件较大，部分 `core` 代码直接访问 ORM、Repository 或外部集成。新增功能时容易不知道逻辑应该放在哪里。
+本方案只处理 WebUI 的页面迁移与直接相关的前端逻辑问题，不借机重写 Agent、记忆、渠道或后端架构。目标是：
 
-本方案目标是让知语采用类似 NapCat 的前端实现方式：
-
-1. 以渐进式模块化单体整理 API、CLI、应用服务、核心逻辑与基础设施的职责边界。
-2. 以 React 组件组织页面、表单、弹窗、通知和状态反馈，统一替换浏览器原生输入/确认/提示框。
-3. 延续知语现有深色界面、粉色强调色与侧栏导航，并借鉴 NapCat 的紧凑设置面板交互。
-4. 保持 FastAPI、数据库、密钥存储、运行时行为和现有 `/api` 合约不变。
-5. 产物仍可由 `uv run zhiyu serve` 单命令托管，不要求最终用户运行 Node 服务。
+1. 将整个现有 WebUI 页面迁移为 React 组件，而不是只提供 React 弹窗。
+2. 修正总览状态的误报/漏报和聊天会话切换竞态，加载、空、不可用、异常状态有明确定义。
+3. 延续知语深色与粉色主题，借鉴 NapCat 的页面与表单交互，让整体变化可见且一致。
+4. 优先复用现有 API；只有缺少必要数据或控制接口时才做最小后端变更。
+5. 用户仍只需运行 `uv run zhiyu serve`，不需要在运行机器安装 Node。
 
 ## 2. 当前实现基线
 
-- `src/zhiyu/api/app.py` 使用 FastAPI 提供 API，并从 `src/zhiyu/web/static` 托管静态文件。
-- `src/zhiyu/web/static/index.html` 是当前单页骨架，包含导航、视图容器和少量 `<dialog>`。
-- `src/zhiyu/web/static/app.js` 直接查询 DOM 并绑定事件，承担视图切换、API 请求、表单操作和状态渲染。
-- `src/zhiyu/web/static/styles.css` 同时承载基础样式和深色管理台主题。
-- 前端没有独立的 `package.json`、构建配置或 Node 锁文件。
-- 当前 MCP 新增流程已经改为站内 `<dialog>`；Provider 编辑、MCP 密钥与授权、Skills 生命周期、记忆编辑和确认操作仍有原生对话框。
-- `src/zhiyu/api/app.py` 同时创建服务、定义各类 API 路由并挂载静态资源；目标是让它只负责应用装配和路由注册。
-- `src/zhiyu/cli/main.py` 集中定义大量命令和运行流程；目标是保留 CLI 兼容性，将命令实现按领域拆分。
-- `src/zhiyu/core` 中的 Agent、Memory 和 Provider 模块包含核心算法，但部分文件直接依赖 `infrastructure.database`、Repository、全局配置或 `integrations`。
-- `application` 服务也直接构造具体 Repository、使用默认全局 Session/Manager；测试可注入部分依赖，但边界尚未统一。
-- 仓库整体适合继续作为单机模块化单体，不需要拆分进程或服务。
+- FastAPI 从 `src/zhiyu/web/static` 托管页面和静态资源，现有 `/api` 提供聊天、Provider、QQ、MCP、Skills、诊断和记忆能力。
+- `index.html` 现在仅提供 React 挂载点和静态构建资源；React App 管理侧栏、路由、最近会话、八个页面及表单操作。
+- `web/` 使用 React、TypeScript、Vite、Tailwind 和 HeroUI；`DialogHost` 继续提供站内表单、确认和 Toast。
+- 浏览器原生 `prompt/confirm/alert` 已替换为站内交互；少数编辑/授权流程仍使用连续站内弹窗，后续可在真实浏览器验收后再收敛为单表单。
+- CI 已加入 `npm ci`、前端 typecheck、纯状态/请求归属测试和 Vite build；Python 测试同时检查 FastAPI 能提供 React 静态入口。
+- 不在本方案中继续拆 CLI、迁移 Core/Repository 依赖或重构运行时；这些与 WebUI 可见问题分开处理。
+
+### 2.1 本方案要解决的已确认问题
+
+1. **页面整体未迁移**：大部分用户可见 UI 仍由旧静态页面渲染，React 弹窗无法让总览、侧栏和各管理页产生明显一致的组件化体验。
+2. **总览状态聚合不完整**：渠道、事件、默认模型接口失败未全部纳入全局状态；QQ 未配置/未启用也可能被当成运行异常。接口不可用不能显示为健康，也不能卡在“检查中”。
+3. **聊天请求与当前会话共享可变状态**：发送期间切换会话或点击新对话，旧 SSE 事件仍可能覆盖当前会话 ID 或写入错误的消息视图。
+4. **前端质量门缺失**：没有页面/交互自动化测试，CI 不验证 React 源码与随 Python 包发布的构建产物。
+5. **页面状态处理分散**：不同页面的加载、空态、错误和保存反馈不完全一致；单个请求失败时容易留下旧值或未处理的 Promise 错误。
 
 ## 3. 方案决策
 
 ### 3.1 采用 React 前端，不改 FastAPI
 
-前端使用 React、TypeScript、Vite、Tailwind CSS 和与 NapCat 相近的 NextUI/HeroUI 风格组件库。组件库在实施前确认兼容性和维护状态，并锁定准确版本。FastAPI 继续提供静态构建产物及 `/api`，不改业务 API 的 URL、请求/响应结构或应用服务边界。
+前端使用现有 React、TypeScript、Vite、Tailwind CSS 和 HeroUI 构建。FastAPI 继续托管静态构建产物并提供 `/api`；默认保持现有 URL、请求/响应结构和 Application 边界，只有表达健康状态或运行取消确实缺字段时，才补充向后兼容的最小接口。
 
 开发时可由 Vite 提供热更新，并将 `/api` 代理到 FastAPI；交付构建时把 Vite 产物输出到 Python 包内的静态目录。用户运行知语仍只需启动 FastAPI。
 
@@ -53,13 +54,11 @@ NapCat WebUI 是一个由 React 驱动的单页应用：服务端返回应用入
 
 本方案按第二种方式实施。React 只替代浏览器前端，不迁移 FastAPI，不复制 NapCat 的账号认证模型或服务端实现细节。
 
-### 3.3 后端采用渐进式模块化单体
+### 3.3 后端边界
 
-- 保留一个 Python 包、一个 FastAPI 进程、一个 CLI 入口和现有 SQLite 数据库。
-- 不按技术潮流改为微服务，不重命名所有模块，不一次性重写 Agent、Memory、渠道或配置系统。
-- 依赖方向统一为：入口层 → application 用例 → core 领域/算法；application 通过明确注入使用持久化及外部能力；`infrastructure`、`channels`、`integrations` 位于外层，不能反向成为 `core` 的依赖。
-- 仅在确实需要隔离且有多个调用方时引入 Protocol/Port，不为单一 Repository 或简单函数机械增加抽象层。
-- 重构期间先移动入口编排和依赖获取，再逐模块切断 `core` 对 SQLAlchemy、Repository、全局单例和集成实现的直接依赖；外部行为与 API 合约保持不变。
+- 保留现有 FastAPI、Application 服务、数据库和 `/api` 合约；本方案不继续拆 CLI、重构 RuntimeHost 或迁移 Core/Repository 依赖。
+- UI 只能通过 HTTP API 访问业务能力，不直接导入 Python 运行时对象、操作数据库或读取本地密钥。
+- 如果现有响应无法区分“未配置、已停用、连接失败、接口不可用”，只补充能表达这些状态的最小 API 字段或只读端点，并为其增加 API 测试；不新建重复的 Web 专属业务服务或数据库表。
 
 ## 4. 目标架构
 
@@ -81,7 +80,7 @@ Infrastructure / Channels / Integrations（DB、KeyStore、OneBot、MCP、Skills
 
 生产运行：FastAPI 托管 React 编译生成的 HTML、JS、CSS 和静态资源。前端不得直接访问数据库、密钥存储或 Runtime 私有对象，只调用现有 API。
 
-推荐目录（只新增/拆分明确边界，不要求一次性搬迁所有文件）：
+目标前端目录（基于已存在的 `web/` 工程逐步形成，不一次性机械拆文件）：
 
 ```text
 web/
@@ -89,44 +88,23 @@ web/
   vite.config.ts
   tsconfig.json
   src/
-    app/          # App、路由、布局
-    components/   # Modal、FormField、Switch、Toast、确认框
-    features/     # providers、mcp、skills、channels、memory 等页面模块
-    lib/          # API Client、SSE、格式化与校验
-    styles/       # Tailwind 入口和主题 token
-  dist/           # 构建结果，复制/输出至知语静态资源目录
+    app/          # React 根应用、路由、页面框架
+    components/   # 导航、状态、表单、弹窗、Toast 等共用组件
+    features/     # overview、chat、providers、channels、mcp、skills、diagnostics、memory
+    lib/          # API client、SSE、请求错误映射、纯状态选择器
+    styles/       # 主题变量与全局样式
+  dist/           # Vite 构建结果
 ```
 
-后端目标边界：
-
-```text
-src/zhiyu/
-  api/
-    app.py             # lifespan、中间件、router 注册、静态资源挂载
-    routes/            # 按 providers、mcp、skills、channels、memory、chat 拆路由
-    schemas/            # 请求/响应模型；共享 DTO 避免各路由重复定义
-  cli/
-    main.py             # 参数解析与命令注册
-    commands/           # 按 chat、provider、channel、mcp、skills、memory 拆命令实现
-  application/          # 用例与事务编排；入口共享同一组服务
-  core/                 # Agent、Memory、Provider 等核心规则/算法，不访问具体 DB/API
-  infrastructure/
-    database/           # SQLAlchemy models、repositories、migrations
-    config/             # Settings、KeyStore、日志等系统适配
-  channels/             # OneBot/QQ 等渠道适配、消息协议与媒体处理
-  integrations/         # MCP、Skills 等外部协议/扩展适配
-  web/static/           # React 生产构建产物（开发源码独立放在 web/src）
-```
-
-按当前规模继续使用 `application/*.py` 等现有文件布局也可；只有在文件职责自然成组时才形成子包。目录名称不能替代依赖规则，边界以 import 方向和公开接口为准。
-
-实际文件位置应按 Python 包构建规则确认，避免源码包漏掉构建后的静态资源。Node 依赖、lockfile 和构建命令放在独立 `web/` 目录，不让 Python 运行时安装 Node 依赖。
+Vite 构建产物继续输出到 Python 包可托管的静态目录。Node 依赖与锁文件放在 `web/`；用户运行时无需 Node。只有职责和测试边界清楚时才新增模块，不为每个小组件机械建目录。
 
 ## 5. 视觉与交互规范
 
 ### 5.1 统一外观
 
 - 延续知语现有深色背景、粉色主操作色、圆角面板和左侧导航，不整体照搬 NapCat 的信息架构或品牌素材。
+- 页面主框架、导航、页标题、内容区、对话布局和管理页卡片统一由 React 渲染；迁移完成前后视觉必须有整体可见差异，而非只替换弹窗。
+- 桌面保持侧栏导航；窄屏提供可收起导航，内容不横向溢出。页面结构以“先看状态、再做操作”为主，不堆叠无意义卡片。
 - 管理弹窗居中显示，背景使用半透明暗色遮罩和适度模糊；面板宽度按任务调整，内容过长时面板内部滚动。
 - 标题、简短说明、关闭按钮、分区表单、底部取消/主操作按钮采用统一布局。
 - 错误放在字段旁或表单顶部；成功使用轻量 Toast；破坏性确认使用自定义 ConfirmDialog。
@@ -157,6 +135,21 @@ src/zhiyu/
 
 ## 6. 页面与弹窗清单
 
+### 6.0 应用框架与总览
+
+- 将现有八个视图迁为 React 页面：运行总览、对话、模型服务、QQ 渠道、MCP 服务、Skills、运行诊断、长期记忆。侧栏导航、最近会话、页面标题和窄屏导航属于统一 App Shell。
+- 路由能表达当前页面及会话 ID；浏览器刷新和前进/后退不会一律回到总览。新建会话和打开已有会话不混用隐式全局 DOM 状态。
+- 总览展示运行时、默认模型、QQ、MCP、Skills、记忆后台任务和最近渠道事件；计数注明统计范围，事件查询最近 50 条就明确写“最近 50 条”，不冒充全量队列。
+- 各健康项以服务端实际配置/启用/运行状态为准。未配置或主动停用的可选集成显示中性状态，不把全局判为故障；启用且断连才降级。API 返回失败时显示“状态未知/检查不完整”，不得显示健康或保留“检查中”。
+- “运行正常”只能在必需接口成功、必要 Provider/默认模型有效且运行时正常时显示。各模块独立加载、独立错误，不因一个 API 失败冻结其他卡片。
+
+### 6.0.1 对话与会话切换
+
+- SSE 请求启动时捕获不可变的 `requestConversationId` 与请求 ID；后台事件只能更新对应请求的消息，不允许旧请求覆盖用户当前选择的会话。
+- 切换会话、新建会话或离开正在运行的对话时，采用一个一致策略：明确取消当前运行并调用已有取消接口（若服务端已分配 run ID），或由用户选择继续后台运行；首版采用“切换/新建时取消”，不静默把旧回复写入新会话。
+- 发送中展示停止操作；取消、网络错误、模型错误和正常完成使用不同状态。取消后保留已收到的部分输出并允许重试，不伪装成完整回复。
+- 页面在切换会话时重新载入目标会话消息；请求完成后只刷新对应会话列表，不改写当前选中会话。
+
 ### 6.1 Provider 与模型
 
 - Provider 新增/编辑：名称、协议、Base URL、启用状态、API Key 或环境变量来源。
@@ -185,21 +178,18 @@ src/zhiyu/
 ### 6.4 其他页面
 
 - QQ 配置、群聊策略、记忆编辑、渠道事件重放和未知状态投递重试逐步迁移到统一表单/确认/结果组件。
-- 本方案完成后，`app.js` 中的功能按页面拆为 React feature modules；不要求改变页面当前业务范围。
+- 现有页面业务已由 React 接管；当前页面编排和动作仍集中在 `web/src/app.tsx`，按 `features/` 拆分模块是待完成的结构整理，不应改变 API 或业务范围。
 
 ## 7. 状态与 API 约定
 
 - 建立单一 API Client，统一 JSON 解码、HTTP 错误映射、请求超时和 AbortSignal；错误文案不携带密钥或认证头。
-- 初期直接使用轻量 React state 和页面级请求，不因为改 React 就引入全局状态框架或请求缓存库。
+- 初期直接使用轻量 React state 和页面级请求，不因为改 React 就引入全局状态框架或请求缓存库；同一页面的请求应支持取消或用请求序号忽略过期响应。
 - SSE 仅用于已有或确需的实时状态/日志，页面卸载时关闭连接；不得以高频轮询替代。
 - 继续使用现有 API 路径与 Pydantic 校验；只有实际缺少业务能力时才单独提出后端接口改动。
 - Provider/MCP/Skills 变更后沿用现有 Runtime revision/reload 机制；UI 明确区分“已保存”和“运行时已生效”。
-- 将 `api/app.py` 收敛为 FastAPI factory、lifespan、中间件、依赖装配和 router 注册；每类资源由 `api/routes/<feature>.py` 处理，输入/输出模型放在对应 `schemas` 文件。路由只做协议层校验、调用用例、转换 HTTP 错误，不直接操作 ORM、Repository 或 Manager 私有字段。
-- 将 `cli/main.py` 收敛为命令解析、命令注册与进程启动；命令实现迁到 `cli/commands/<feature>.py`。CLI 和 Web/API 共享 `application` 服务，不能分别复制业务规则。
-- `RuntimeHost` 是常驻进程的 composition root：集中创建和注入 Chat、Channel、MCP、Skills、Provider 等对象并管理生命周期。业务模块不反向导入 `RuntimeHost` 或读取其全局实例。
-- `core` 不直接依赖 SQLAlchemy、具体 Repository、KeyStore、FastAPI、CLI、`channels` 或 `integrations`。持久化和外部能力需要由 application 通过构造参数/小型 Protocol 注入；不需要外部能力的核心算法保持纯函数或纯对象。
-- `application` 负责事务边界和用例编排，可依赖 core 与稳定的 Repository/能力接口；具体 SQLAlchemy Repository、HTTP/MCP/OneBot 实现由外层装配提供。逐步移除服务中隐式创建全局 Session、默认 Manager 和全局 Registry 的路径。
-- 不以文件行数机械拆分。只有当一组路由/命令/用例具有独立职责、生命周期或测试边界时才拆模块；拆分前后保持对外 API、CLI 参数和数据格式兼容。
+- Dashboard 状态选择逻辑写成纯函数，至少接收每个 API 的 `success / failure`、配置是否存在、是否启用和运行状态；不通过 `[]` 同时表达“没有配置”和“读取失败”。
+- 第一版复用现有 `/api/health`、`/api/providers/default`、`/api/channels`、`/api/qq/config`、`/api/mcp/servers`、`/api/skills` 和事件接口。仅当这些响应无法表达必要状态时才补最小只读字段/接口，不新建聚合服务或数据库表。
+- 对写操作，API 返回后按服务端响应刷新对应 feature；不通过直接操作另一页面 DOM 来同步状态。
 
 ## 8. 安全、兼容与部署
 
@@ -212,49 +202,55 @@ src/zhiyu/
 
 ## 9. 分阶段实施
 
-### 阶段 A：稳定架构边界与保护现状
+### 阶段 0：建立前端回归基线
 
-- 固化当前行为基线：Python 全量测试、关键 Web API 合约、CLI `--help`/命令测试、数据库迁移启动测试。
-- 将 FastAPI 路由按 Provider、MCP、Skills、渠道、记忆、对话等资源拆出，`api/app.py` 保留装配和生命周期逻辑。
-- 将 CLI 命令实现按领域拆分，`cli/main.py` 保留解析和注册；所有业务逻辑仍调用现有 application 服务。
-- 增加轻量依赖边界检查，逐步禁止 `core` 新增对 ORM、Repository 和 adapter 的反向依赖；本阶段不要求一次性清除所有既有反向依赖。
+- 为总览状态选择器和聊天请求状态增加可重复的自动化用例，先锁定当前确认的错误行为。
+- 记录现有主要用户路径：新建/打开对话、添加 Provider、配置 QQ、添加/授权 MCP、安装/更新 Skill、编辑记忆、重放/重试渠道记录。
+- 确认 FastAPI 仍从 wheel 内静态目录提供页面，且 API 合约作为迁移兼容边界。
 
-### 阶段 B：应用层依赖收敛
+### 阶段 1：React 应用框架与总览修复
 
-- 确认 `RuntimeHost` 是唯一运行时装配入口，统一创建同一组 services/managers/registries。
-- 优先选一条垂直链路（建议 Provider 配置或 Memory 读取/写入）演练“核心规则—application 用例—Repository 接口—infrastructure 实现”的边界。
-- 对核心模块逐块迁出直接数据库查询、全局配置和集成实例；保留现有数据库模型及数据，仅调整依赖传递方式。
-- 每次只迁一块并保留行为测试；未证明能降低耦合的抽象不扩散到其他模块。
+- React 接管应用入口、侧栏、路由、页面标题、最近会话区域和统一错误/空/加载状态组件。
+- 实现状态选择纯函数和接口独立容错；修复可选服务的未配置/已停用语义、事件统计窗口与服务不可用状态。
+- 将总览及其状态卡片迁入 React，形成第一批用户可直接看见的整体界面变化。
 
-### 阶段 C：React 工程骨架与共享交互
+### 阶段 2：聊天状态与运行控制
 
-- 增加 Vite、React、TypeScript、Tailwind 和与 NapCat 对照的 UI 组件库依赖及锁文件。
-- 配置开发代理至 FastAPI `/api`，配置生产输出目录和 Python 包静态资源路径。
-- 建立 React 根组件、路由、侧栏布局、主题 token、API Client、SSE 生命周期和全局 Toast。
-- 实现 `AppDialog`、FormField、SecretField、SwitchCard、ConfirmDialog 和 LoadingButton。
-- 验证 `uv run zhiyu serve` 能正确提供构建产物，且现有 API/CLI 行为不受影响。
+- 迁移聊天页及会话列表，绑定会话 ID 路由；修复切换、新建、取消、SSE 结束和错误时的竞态。
+- 覆盖运行中切换会话、连续发起/取消、断流和旧响应晚到等回归场景。
 
-### 阶段 D：逐页迁移 WebUI
+### 阶段 3：逐批迁移管理页
 
-- 优先迁移 Provider/模型与 MCP，再迁移 Skills、QQ 渠道、运行诊断、记忆编辑、聊天和总览。
-- 页面源码按 `features/<feature>` 拆分，共享状态与 API 放在 `app`/`lib`，不继续产生新的巨型入口文件。
-- 各页面接入成功/失败反馈、空态、加载态、未保存确认、键盘与焦点行为。
-- 对照 API 清单完成交互冒烟和安全检查。
-- 确认无页面依赖旧 `app.js` 后删除旧事件处理代码和不再使用的 CSS。
-- 整理 `docs/README.md` 作为唯一设计文档索引，标记方案状态、实施记录和当前有效基线；修正失效链接，不自动删除旧文档。
-- 更新开发与打包文档；执行 Python 测试、前端类型检查、构建、wheel 静态资源检查和主要路径冒烟。
+- 迁移 Provider/模型与 MCP，再迁移 Skills、QQ 渠道、诊断和记忆页；保留现有 API、业务范围和数据。
+- 所有原生 HTML 页面表单改成受控 React 组件，消除旧 JS 事件绑定与 React 弹窗 Host 的双重实现。
+- 页面具备统一的保存中、成功、失败、空状态和表单校验；Secret 不回显且提交后清空。
 
-每阶段均可运行和回滚；只有阶段 D 验收通过后才移除旧前端文件。React 构建失败时保留上一份可运行静态产物。后端结构迁移不执行数据库操作，因此回滚不涉及数据恢复。
+### 阶段 4：移除旧前端并纳入 CI
+
+- 确认页面、路由和全部业务动作不再依赖旧 `index.html` 视图结构、`app.js` 和过期样式后，再移除旧实现。
+- CI 增加 `npm ci`、typecheck、组件/页面测试和生产构建；检查 wheel 确实包含本次构建产物。
+- 在本机运行完整用户路径冒烟，确认 `uv run zhiyu serve` 可单命令提供 UI。
+
+每阶段可独立运行和回滚；旧 UI 仅在阶段 4 验收后删除。前端构建失败不得覆盖最后一份可运行静态产物。此方案不要求数据库迁移。
 
 ## 10. 验收标准
 
 ### 视觉与交互
 
-- 页面使用 React 组件渲染，路由切换不依赖手工隐藏/显示所有视图节点。
+- 八个现有页面全部由 React 渲染；导航和路由切换不依赖手工隐藏/显示静态视图节点。完成后用户打开总览、聊天及管理页时都能看到一致的新页面框架，而不只是弹窗变化。
 - 弹窗视觉符合知语主题并借鉴 NapCat：统一遮罩、面板、表单分组、关闭、取消、主操作和提交状态。
 - 全前端不再调用 `window.prompt`、`window.confirm` 或 `window.alert`。
 - Provider、MCP、Skills 的核心管理操作不要求用户手写 JSON；权限通过可读列表勾选。
 - 表单具备标签、必填状态、校验错误、提交状态、键盘操作和未保存离开保护。
+- 桌面侧栏与窄屏导航都可用；无横向溢出，键盘焦点可见，弹窗有正确的焦点进入/返回。
+
+### 状态与对话正确性
+
+- 总览覆盖：所有接口成功、单个非关键接口失败、核心接口失败、可选服务未配置、已停用、启用但断连、默认模型不可用、事件查询失败等场景。
+- 任一接口失败后相关模块明确为不可用/未知，其他成功模块仍更新；不得把接口失败伪装成零条数据或“运行正常”。
+- QQ/MCP/Skills 未配置或主动停用不单独造成故障；开启且连接失败/依赖缺失才降级。
+- 最近事件和待处理事件的统计范围明确，不将最近 N 条数据表示为全量积压。
+- 聊天运行中的切换、新建和取消有明确行为；迟到的 SSE 事件不会改变另一会话的消息或选中状态。
 
 ### 业务与安全
 
@@ -263,22 +259,20 @@ src/zhiyu/
 - MCP/Skill 外部文本安全显示；删除、覆盖更新、未知状态重试均显示明确风险和确认。
 - 空列表和加载失败可区分，管理入口在滚动页面的空状态中仍然可见。
 
-### 后端架构
+### API、安全与兼容
 
-- `api/app.py` 和 `cli/main.py` 主要承担启动、装配和注册，不再集中承载各领域操作实现。
-- Provider/MCP/Skills/Channels/Memory API 依资源拆分；各 API 的请求/响应合约与当前客户端兼容。
-- Web 与 CLI 复用同一 application 用例，不存在两套业务规则。
-- `RuntimeHost` 负责运行时依赖装配；Application 服务的依赖显式可注入，核心代码不构造全局数据库 Session 或 Manager。
-- `core` 不新增对 `infrastructure`、数据库 Repository、CLI/API 或 `integrations/channels` 实现的反向依赖；已有反向依赖按垂直切片逐步清除。
-- 无 schema 迁移、无数据搬迁，旧用户数据库、配置、CLI 命令和 `/api` 请求保持兼容。
+- 页面只调用现有 `/api`；任何确需补充的 API 仅增加表达状态或取消运行所必需的能力，保留已有路由和响应兼容。
+- UI 迁移不新增数据库迁移，不改变 CLI 参数、现有配置或用户数据。
+- WebUI 继续仅供本机使用，不扩大监听范围；Secret 不回显、不写入 localStorage、URL 或日志。
+- Provider/MCP/Skills 配置及能力授权仍通过现有 application 服务生效，不从前端绕过后端校验。
 
 ### 工程与发布
 
 - 前端 lint/typecheck/build 全通过，构建目录包含于 Python wheel/应用发行包。
 - `uv run zhiyu serve` 单命令可从打包静态目录启动完整 UI。
-- Python 全量测试、前端组件/页面测试、主要用户路径冒烟均通过。
-- 旧版运行实例和已存在配置无需迁移即可启动新版。
-- 架构依赖检查覆盖 `core` import 方向；API 路由和 CLI 命令拆分有对应的合约/回归测试。
+- Python 全量测试、前端状态/组件/页面测试、主要用户路径浏览器冒烟均通过。
+- CI 在构建或测试失败时阻止合并，且确保 `web/src` 与 Python wheel 内静态产物来自同次构建。
+- 旧版用户数据、已存在配置和当前 API 调用无需迁移即可使用新版 UI。
 
 ## 11. 非目标与风险
 
@@ -290,14 +284,13 @@ src/zhiyu/
 
 ## 12. 交付范围
 
-实施完成后，知语仍是一个易于本地安装和运行的模块化单体：FastAPI/CLI 作为薄入口共享 Application 用例，Core 与具体数据库/渠道/集成实现隔离；WebUI 使用 React 组件化界面并由 FastAPI 托管。前端工程栈会变化，后端 API、CLI 使用方式和用户数据不迁移。
+实施完成后，知语仍由 FastAPI 托管本机 React WebUI；所有现有页面、交互和状态都由一套 React 应用管理。后端 API、CLI 使用方式、数据库和用户数据不迁移；前端完整构建产物包含在 Python wheel 中。
 
 ## 实施记录
 
-- 2026-10-06：将 Provider、MCP、Skills、QQ/渠道事件、对话/运行记录、记忆 API 拆入 `api/routes/`，对应请求模型拆入 `api/schemas/`；`create_app` 负责服务装配和路由注册。URL、请求/响应结构及管理端安全中间件保持不变。
-- 当前 `api/app.py` 从 685 行收敛至 86 行，保留 FastAPI 生命周期、本机管理安全策略、路由注册、健康检查和静态资源托管。
-- 将 Provider CLI 命令首个切片迁入 `cli/commands/providers.py`，CLI 参数及命令行为保持不变；纯提示词组装模块 `core/characters/prompts.py` 不再导入 ORM 模型。
-- 建立 `web/` 的 React 19、Vite、TypeScript、Tailwind CSS v4 与 HeroUI v3 构建；统一站内 Modal/Toast Host 已接管管理交互，Provider 与 MCP 新增使用分组 React 表单，其他输入、确认和提示使用同一套站内弹窗。Provider/MCP 的旧 HTML `<dialog>` 已移除，避免双实现。现有业务页面主体仍保留在旧静态入口，按渐进迁移继续推进。
-- Vite 产物位于 `src/zhiyu/web/static/react/`，经 Python wheel 检查确认会随应用包携带；用户启动 WebUI 不需要 Node。
-- 本轮验证：`uv run pytest -q`（218 passed）、`uv run zhiyu --help`、`git diff --check`。
-- 尚未完成：其余 CLI 命令拆分、聊天/运行记录路由仍直接访问 Repository 的依赖治理、Application/Core 依赖收敛及 React 业务页面迁移。旧页面主体仍由 FastAPI 静态托管。
+- 2026-10-06：FastAPI API 已拆为资源路由与 schema；`api/app.py` 保留应用装配和静态资源托管。Provider CLI 命令有首个按领域拆分切片。以上视为已存在的后端基线，不属于本方案的待交付 UI 目标。
+- 2026-10-07：React 接管应用 Shell、侧栏导航、深链接/会话路由与全部八个页面；Provider、QQ、MCP、Skills、诊断、长期记忆的主要管理动作迁入 React；旧静态 `app.js` 已移除。页面代码暂集中在 `web/src/app.tsx`，后续按 feature 边界拆分。
+- 2026-10-07：总览状态采用纯函数聚合 API 成功/失败、Provider 默认模型、QQ 配置和可选 MCP/Skills 状态；“未知/检查不完整”与“未配置/未启用”分开。聊天 SSE 事件限定在发起该请求的会话，切换/新建/离开会话时取消运行并忽略迟到事件。
+- 2026-10-07：CI 加入 Node 22、`npm ci`、TypeScript 检查、前端状态测试和 Vite 构建；Python Web API 测试验证根页面、React JS/CSS 可提供。构建产物已验证随 wheel 打包。
+- 尚未完成：尚未进行真实浏览器端到端操作验收；需实测 MCP 能力授权、窄屏导航、键盘焦点、未保存离开和运行中取消时序，并按 feature 边界拆分当前 React 页面编排代码。
+- 本轮验证：前端 typecheck 通过；6 项前端状态/请求归属测试通过；Python 全量测试 218 项通过；`uv build` wheel/sdist 成功，wheel 含 React JS/CSS 资源。

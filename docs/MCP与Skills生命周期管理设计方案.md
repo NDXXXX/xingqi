@@ -440,7 +440,7 @@ Skill 匹配与按需读取保持现有路径：system prompt 只列可用名称
 - `src/zhiyu/application/skills.py`：Skill 生命周期用例和来源管理。
 - `src/zhiyu/cli/main.py`：`mcp` / `skills` 子命令。
 - `src/zhiyu/api/app.py`：MCP 与 Skills 只读状态接口。
-- `src/zhiyu/web/static/app.js`：状态摘要，不扩展写配置表单。
+- WebUI 已迁至 `web/src/app.tsx`；MCP 与 Skills 页面在站内管理生命周期和授权操作。此处只约束 MCP/Skills 后端边界，不再依赖旧 `static/app.js`。
 
 实现时按现有项目风格微调；不借此重构整个 Tool Registry、Provider 或 WebUI。
 

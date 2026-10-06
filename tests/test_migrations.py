@@ -53,7 +53,7 @@ def test_upgrade_preserves_legacy_data(tmp_path):
 
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT title FROM conversations WHERE id='c1'")) == "保留我"
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0019_installed_skill_trash"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0020_memory_context_checkpoints"
         assert connection.scalar(
             text("SELECT owner_user_id FROM channel_configs WHERE channel='qq'")
         ) is None
@@ -98,6 +98,13 @@ def test_upgrade_preserves_legacy_data(tmp_path):
         column["name"] for column in inspect(engine).get_columns("memories")
     }
     assert {"memory_sources", "memory_recall_events", "memory_mutations"} <= tables
+    assert "memory_file_indexes" in tables
+    assert "last_evidence_at" in {
+        column["name"] for column in inspect(engine).get_columns("memories")
+    }
+    assert {"last_message_id", "last_message_created_at"} <= {
+        column["name"] for column in inspect(engine).get_columns("conversation_summaries")
+    }
 
 
 def test_reverse_upgrade_disables_old_qq_endpoint(tmp_path):
