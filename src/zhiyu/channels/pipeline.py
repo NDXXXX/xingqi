@@ -55,7 +55,7 @@ class PolicyStage:
 
 
 class DedupStage:
-    """Phase 1占位；Phase 2注入持久化重复检查。"""
+    """在进入 Agent 前执行可注入的持久化重复检查。"""
 
     def __init__(
         self,
@@ -75,9 +75,24 @@ class DedupStage:
 
 
 class SessionStage:
-    """为后续会话键迁移保留明确阶段，当前不修改事件。"""
+    """会话解析的显式流水线边界；账号级会话键由 Router 持久化。"""
 
     async def process(self, context: InboundContext) -> StageDecision:
+        return StageDecision.CONTINUE
+
+
+class NormalizeStage:
+    def __init__(
+        self,
+        normalize: Callable[[InboundEvent], InboundEvent | Awaitable[InboundEvent]],
+    ) -> None:
+        self.normalize = normalize
+
+    async def process(self, context: InboundContext) -> StageDecision:
+        result = self.normalize(context.event)
+        if hasattr(result, "__await__"):
+            result = await result
+        context.event = result
         return StageDecision.CONTINUE
 
 
@@ -116,6 +131,16 @@ class RenderStage:
                 conversation_type=context.event.conversation_type,
                 source_event_id=context.event.event_id,
             )
+        return StageDecision.CONTINUE
+
+
+class PersistResponseStage:
+    def __init__(self, persist: Callable[[InboundEvent, OutboundMessage], None]) -> None:
+        self.persist = persist
+
+    async def process(self, context: InboundContext) -> StageDecision:
+        if context.outbound is not None:
+            self.persist(context.event, context.outbound)
         return StageDecision.CONTINUE
 
 

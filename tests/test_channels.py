@@ -5,6 +5,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from zhiyu.application.channels import ChannelService
+from zhiyu.application.inbound import ChannelReliabilityService
 from zhiyu.channels.base import IncomingMessage
 from zhiyu.channels.messages import (
     AudioPart,
@@ -121,3 +122,42 @@ def test_configure_qq_can_clear_existing_token():
         assert config.secret_ref is None
         assert config.owner_user_id == "123"
     assert secrets.deleted == [old_ref]
+
+
+def test_failed_delivery_can_be_queued_and_unknown_requires_confirmation():
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine)
+    reliability = ChannelReliabilityService(sessions)
+    inbound = InboundEvent(
+        event_id="event-1",
+        channel="qq",
+        account_id="qq-onebot-default",
+        conversation_id="123",
+        conversation_type="private",
+        sender_id="123",
+        parts=[TextPart(text="hi")],
+    )
+    assert reliability.claim(inbound)
+    outbound = OutboundMessage.text("123", "ok", source_event_id=inbound.event_id)
+    reliability.responded(inbound.event_id, outbound)
+    failed = reliability.create_delivery(inbound.event_id, "request-1", message=outbound)
+    reliability.finish_delivery(failed.id, status="failed", error="rejected")
+    reliability.complete(inbound.event_id)
+
+    queued_id = reliability.queue_delivery_retry(failed.id)
+    items = reliability.list_deliveries()
+    queued = next(item for item in items if item["id"] == queued_id)
+    assert queued["status"] == "queued"
+    assert queued["retry_of_id"] == failed.id
+
+    unknown = reliability.create_delivery(inbound.event_id, "request-2", message=outbound)
+    reliability.finish_delivery(unknown.id, status="unknown")
+    try:
+        reliability.queue_delivery_retry(unknown.id)
+    except ValueError as exc:
+        assert "显式确认" in str(exc)
+    else:
+        raise AssertionError("unknown delivery must require confirmation")

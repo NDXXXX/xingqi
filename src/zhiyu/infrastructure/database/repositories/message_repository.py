@@ -25,6 +25,8 @@ class MessageRepository:
         conversation_id: str,
         role: str,
         content: str,
+        parts_json: str | None = None,
+        source_event_id: str | None = None,
         commit: bool = True,
     ) -> Message:
         message = Message(
@@ -32,6 +34,8 @@ class MessageRepository:
             conversation_id=conversation_id,
             role=role,
             content=content,
+            parts_json=parts_json,
+            source_event_id=source_event_id,
         )
         db.add(message)
         if commit:
@@ -40,6 +44,18 @@ class MessageRepository:
         else:
             db.flush()
         return message
+
+    def get_by_source(
+        self, db: Session, source_event_id: str, role: str
+    ) -> Message | None:
+        return db.scalars(
+            select(Message)
+            .where(
+                Message.source_event_id == source_event_id,
+                Message.role == role,
+            )
+            .order_by(Message.created_at)
+        ).first()
 
     def prepare_regeneration(self, db: Session, conversation_id: str) -> Message | None:
         messages = self.list_by_conversation(db, conversation_id)

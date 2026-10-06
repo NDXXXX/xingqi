@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from zhiyu.application.chat import ChatRequest, ChatService
+from zhiyu.channels.messages import ImagePart, TextPart
 from zhiyu.application.memories import MemoryService
 from zhiyu.core.memory.manager import MemoryManager
 from zhiyu.core.memory.store import MemoryStore
@@ -371,6 +372,74 @@ async def test_unauthorized_qq_sender_is_rejected_before_conversation_creation()
 
     with sessions() as db:
         assert ConversationRepository().list(db) == []
+
+
+async def test_channel_event_reuses_completed_agent_run_and_passes_images_to_vision_model():
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    with sessions() as db:
+        provider_config = ProviderRepository().create(
+            db, name="Vision", provider_type="openai", api_key_ref="env:FAKE_KEY"
+        )
+        model = provider_config.models[0]
+        model.supports_vision = True
+        config = ChannelConfigRepository().upsert(
+            db, "qq", "ws://127.0.0.1:6199/ws", None, owner_user_id="owner"
+        )
+        provider_id = provider_config.id
+        model_name = model.model_name
+        config_id = config.id
+        db.commit()
+
+    class CapturingProvider(AIProvider):
+        def __init__(self):
+            super().__init__("fake")
+            self.calls = []
+
+        async def chat(self, messages, tools=None, stream=False, **kwargs):
+            self.calls.append(messages)
+            return LLMResponse(content="看到了")
+
+    class Router:
+        def __init__(self, provider):
+            self.provider = provider
+
+        def get_provider(self, _config):
+            return self.provider
+
+    provider = CapturingProvider()
+    service = ChatService(sessions, Router(provider), AsyncMock())
+    service.media = type(
+        "FakeMedia", (), {"data_url": staticmethod(lambda _source: "data:image/png;base64,AA==")}
+    )()
+    request = ChatRequest(
+        message="看图[图片]",
+        channel="qq",
+        external_user_id="owner",
+        external_conversation_id="owner",
+        external_conversation_type="private",
+        channel_config_id=config_id,
+        channel_event_id="qq:qq-onebot-default:vision-1",
+        parts=[TextPart(text="看图"), ImagePart(source="managed://asset")],
+        provider_id=provider_id,
+        model=model_name,
+    )
+
+    first = await service.complete(request)
+    second = await service.complete(request)
+    await service.memory_processor.wait_idle()
+
+    assert first.run_id == second.run_id
+    assert len(provider.calls) == 1
+    user_content = next(
+        item["content"]
+        for item in provider.calls[0]
+        if item.get("role") == "user"
+    )
+    assert [item["type"] for item in user_content] == ["text", "image_url"]
 
 
 async def test_qq_new_session_keeps_history_separate_and_reuses_shared_identity():

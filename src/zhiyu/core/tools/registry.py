@@ -24,6 +24,13 @@ class ToolRegistry:
     def to_openai_tools(self) -> list[dict]:
         return [tool.to_openai_tool() for tool in self._tools.values()]
 
+    def filtered(self, allowed: set[str]) -> "ToolRegistry":
+        registry = ToolRegistry()
+        for name, tool in self._tools.items():
+            if name in allowed:
+                registry.register(tool)
+        return registry
+
 
 def default_registry() -> ToolRegistry:
     """内置工具集（Phase 7：calculator + datetime）。"""

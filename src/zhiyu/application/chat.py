@@ -1,12 +1,24 @@
 """Conversation and Agent orchestration independent from any user interface."""
 
 import asyncio
+import json
 import logging
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
+from pydantic import TypeAdapter
 
+from zhiyu.channels.media import MediaStore
+from zhiyu.channels.messages import (
+    AudioPart,
+    FilePart,
+    ImagePart,
+    MentionPart,
+    MessagePart,
+    QuotePart,
+    TextPart,
+)
 from zhiyu.core.agent.context import build_tool_registry, with_agent_context_async
 from zhiyu.core.agent.run_manager import active_runs
 from zhiyu.core.agent.runtime import run_agent, run_agent_stream
@@ -18,6 +30,7 @@ from zhiyu.core.providers.base import AIProvider
 from zhiyu.core.providers.router import ProviderRouter, provider_router
 from zhiyu.core.providers.selection import ProviderSelectionError, select_provider_model
 from zhiyu.infrastructure.database.db import SessionLocal
+from zhiyu.infrastructure.database.models import AgentRun, Conversation, Message, utcnow
 from zhiyu.infrastructure.database.repositories.agent_run_repository import AgentRunRepository
 from zhiyu.infrastructure.database.repositories.conversation_repository import ConversationRepository
 from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository
@@ -45,6 +58,12 @@ class ChatRequest:
     channel: str = "local"
     external_user_id: str | None = None
     external_conversation_id: str | None = None
+    external_conversation_type: str | None = None
+    channel_config_id: str | None = None
+    channel_event_id: str | None = None
+    parts: list[MessagePart] | None = None
+    allowed_tools: list[str] | None = None
+    system_prompt: str | None = None
 
 
 @dataclass(slots=True)
@@ -63,6 +82,7 @@ class _PreparedChat:
     model: str
     supports_tools: bool
     supports_streaming: bool
+    supports_vision: bool
     max_output_tokens: int | None
     fallbacks: list[tuple[str, AIProvider, str]]
     messages: list[dict]
@@ -92,12 +112,13 @@ class ChatService:
         self.provider_configs = ProviderRepository()
         self.settings = SettingRepository()
         self.runs = AgentRunRepository()
+        self.media = MediaStore(session_factory)
 
     async def _prepare(self, db: Session, request: ChatRequest):
         if request.channel == "qq":
             if not request.external_user_id:
                 raise ValueError("QQ 消息缺少发送者 ID")
-            self._require_qq_owner(db, request.external_user_id)
+            self._require_qq_owner(db, request.external_user_id, request.channel_config_id)
         if request.conversation_id:
             conversation = self.conversations.get(db, request.conversation_id)
             if conversation is None:
@@ -119,7 +140,13 @@ class ChatService:
                     db, request.channel, request.external_user_id
                 )
             conversation_key = request.external_conversation_id or request.external_user_id
-            conversation = self.conversations.get_by_external(db, request.channel, conversation_key)
+            conversation = self.conversations.get_by_external(
+                db,
+                request.channel,
+                conversation_key,
+                channel_config_id=request.channel_config_id,
+                conversation_type=request.external_conversation_type,
+            )
             if conversation is None:
                 conversation = self.conversations.create(
                     db,
@@ -127,6 +154,8 @@ class ChatService:
                     channel=request.channel,
                     external_user_id=conversation_key,
                     identity_id=identity.id,
+                    channel_config_id=request.channel_config_id,
+                    external_conversation_type=request.external_conversation_type,
                 )
             elif request.channel == "qq" and conversation.identity_id != identity.id:
                 conversation.identity_id = identity.id
@@ -163,15 +192,38 @@ class ChatService:
                 raise ValueError("没有可以重新生成的用户消息")
             request.message = user_message.content
         else:
-            user_message = self.messages.create(
-                db,
-                conversation_id=conversation.id,
-                role="user",
-                content=request.message,
+            user_message = (
+                self.messages.get_by_source(db, request.channel_event_id, "user")
+                if request.channel_event_id
+                else None
             )
+            if user_message is None:
+                user_message = self.messages.create(
+                    db,
+                    conversation_id=conversation.id,
+                    role="user",
+                    content=request.message,
+                    parts_json=(
+                        json.dumps(
+                            [part.model_dump() for part in request.parts],
+                            ensure_ascii=False,
+                        )
+                        if request.parts
+                        else None
+                    ),
+                    source_event_id=request.channel_event_id,
+                )
 
         history = self.messages.list_by_conversation(db, conversation.id)
-        llm_messages = [{"role": item.role, "content": item.content} for item in history]
+        llm_messages = [
+            {
+                "role": item.role,
+                "content": self._llm_content(
+                    item.content, item.parts_json, supports_vision=model_config.supports_vision
+                ),
+            }
+            for item in history
+        ]
         llm_messages = await with_agent_context_async(
             db,
             conversation,
@@ -181,6 +233,11 @@ class ChatService:
             model_config.max_output_tokens,
             recall=None,
         )
+        if request.system_prompt:
+            llm_messages = [
+                {"role": "system", "content": request.system_prompt},
+                *llm_messages,
+            ]
         fallback_mapping = self.settings.get(db, PROVIDER_FALLBACKS_KEY) or {}
         if not isinstance(fallback_mapping, dict):
             fallback_mapping = {}
@@ -200,6 +257,8 @@ class ChatService:
             )
             if fallback_model is None:
                 continue
+            if model_config.supports_vision and not fallback_model.supports_vision:
+                continue
             fallbacks.append(
                 (
                     fallback_config.id,
@@ -216,6 +275,7 @@ class ChatService:
             model=model_config.model_name,
             supports_tools=model_config.supports_tools,
             supports_streaming=model_config.supports_streaming,
+            supports_vision=model_config.supports_vision,
             max_output_tokens=model_config.max_output_tokens,
             fallbacks=fallbacks,
             messages=llm_messages,
@@ -223,7 +283,13 @@ class ChatService:
         )
 
     def new_channel_session(
-        self, channel: str, external_user_id: str, external_conversation_id: str
+        self,
+        channel: str,
+        external_user_id: str,
+        external_conversation_id: str,
+        *,
+        channel_config_id: str | None = None,
+        conversation_type: str = "private",
     ):
         """Start an empty channel conversation while retaining the Agent memory identity."""
         if channel != "qq":
@@ -231,17 +297,25 @@ class ChatService:
         if not external_user_id or not external_conversation_id:
             raise ValueError("外部渠道消息缺少用户或会话 ID")
         with self.session_factory() as db:
-            self._require_qq_owner(db, external_user_id)
+            self._require_qq_owner(db, external_user_id, channel_config_id)
             return self.conversations.create(
                 db,
                 title="QQ 新会话",
                 channel=channel,
                 external_user_id=external_conversation_id,
                 identity_id=self.identities.local(db).id,
+                channel_config_id=channel_config_id,
+                external_conversation_type=conversation_type,
             )
 
-    def _require_qq_owner(self, db: Session, external_user_id: str) -> None:
-        config = self.channel_configs.get(db, "qq")
+    def _require_qq_owner(
+        self, db: Session, external_user_id: str, channel_config_id: str | None = None
+    ) -> None:
+        config = (
+            self.channel_configs.get_by_id(db, channel_config_id)
+            if channel_config_id
+            else self.channel_configs.get(db, "qq")
+        )
         if config is None or not config.owner_user_id:
             raise ValueError("QQ 未配置主人 ID，拒绝访问个人 Agent")
         if external_user_id != config.owner_user_id:
@@ -255,6 +329,27 @@ class ChatService:
     ) -> AsyncGenerator[dict, None]:
         run_id: str | None = None
         try:
+            if request.channel_event_id:
+                with self.session_factory() as cached_db:
+                    cached = self.runs.get_by_event(cached_db, request.channel_event_id)
+                    response = (
+                        cached_db.get(Message, cached.response_message_id)
+                        if cached is not None and cached.status == "completed" and cached.response_message_id
+                        else None
+                    )
+                    if cached is not None and response is not None:
+                        yield {
+                            "type": "run",
+                            "run_id": cached.id,
+                            "conversation_id": cached.conversation_id,
+                        }
+                        yield {
+                            "type": "done",
+                            "run_id": cached.id,
+                            "conversation_id": cached.conversation_id,
+                            "response": response.content,
+                        }
+                        return
             with self.session_factory() as db:
                 prepared = await self._prepare(db, request)
                 run = self.runs.create(
@@ -262,9 +357,12 @@ class ChatService:
                     prepared.conversation_id,
                     prepared.provider_id,
                     prepared.model,
+                    channel_event_id=request.channel_event_id,
                 )
                 run_id = run.id
             registry = build_tool_registry(self.mcp_manager)
+            if request.allowed_tools is not None:
+                registry = registry.filtered(set(request.allowed_tools))
             active_runs.register(run_id)
             yield {
                 "type": "run",
@@ -306,13 +404,28 @@ class ChatService:
                 yield event
 
             with self.session_factory() as db:
-                assistant_message = self.messages.create(
-                    db,
-                    conversation_id=prepared.conversation_id,
-                    role="assistant",
-                    content=final_response,
-                    commit=False,
+                assistant_message = (
+                    self.messages.get_by_source(db, request.channel_event_id, "assistant")
+                    if request.channel_event_id
+                    else None
                 )
+                if assistant_message is None:
+                    assistant_message = self.messages.create(
+                        db,
+                        conversation_id=prepared.conversation_id,
+                        role="assistant",
+                        content=final_response,
+                        parts_json=json.dumps(
+                            [TextPart(text=final_response).model_dump()], ensure_ascii=False
+                        ),
+                        source_event_id=request.channel_event_id,
+                        commit=False,
+                    )
+                else:
+                    assistant_message.content = final_response
+                    assistant_message.parts_json = json.dumps(
+                        [TextPart(text=final_response).model_dump()], ensure_ascii=False
+                    )
                 if not request.regenerate and prepared.identity_id:
                     self.memory_jobs.create(
                         db,
@@ -322,21 +435,26 @@ class ChatService:
                         provider_id=final_provider_id,
                         model=final_model,
                     )
+                conversation = db.get(Conversation, prepared.conversation_id)
+                run_record = db.get(AgentRun, run_id)
+                finished_at = utcnow()
+                if conversation is not None:
+                    conversation.model_id = final_model
+                    conversation.updated_at = finished_at
+                if run_record is None:
+                    raise RuntimeError("Agent Run 不存在")
+                run_record.status = "completed"
+                run_record.finished_at = finished_at
+                run_record.duration_ms = int(
+                    (finished_at - run_record.started_at).total_seconds() * 1000
+                )
+                run_record.prompt_tokens = prompt_tokens
+                run_record.completion_tokens = completion_tokens
+                run_record.provider_id = final_provider_id
+                run_record.model_id = final_model
+                run_record.response_message_id = assistant_message.id
+                run_record.error = None
                 db.commit()
-                self.conversations.touch(
-                    db,
-                    prepared.conversation_id,
-                    final_model,
-                )
-                self.runs.finish(
-                    db,
-                    run_id,
-                    "completed",
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    provider_id=final_provider_id,
-                    model_id=final_model,
-                )
             self.memory_processor.kick()
             yield {
                 "type": "done",
@@ -370,6 +488,43 @@ class ChatService:
         if result is None:
             raise RuntimeError("Agent 未返回最终结果")
         return result
+
+    def _llm_content(
+        self, content: str, parts_json: str | None, *, supports_vision: bool
+    ):
+        if not parts_json:
+            return content
+        try:
+            parts = TypeAdapter(list[MessagePart]).validate_json(parts_json)
+        except (ValueError, TypeError):
+            return content
+        rendered: list[dict] = []
+        text_fallback: list[str] = []
+        for part in parts:
+            if isinstance(part, TextPart):
+                if part.text:
+                    rendered.append({"type": "text", "text": part.text})
+                    text_fallback.append(part.text)
+            elif isinstance(part, ImagePart):
+                data_url = self.media.data_url(part.source) if supports_vision else None
+                if data_url:
+                    rendered.append({"type": "image_url", "image_url": {"url": data_url}})
+                else:
+                    text_fallback.append("[图片]")
+            elif isinstance(part, AudioPart):
+                text_fallback.append("[语音，当前未启用转写]")
+            elif isinstance(part, FilePart):
+                text_fallback.append(f"[文件: {part.name or '未命名'}]")
+            elif isinstance(part, MentionPart):
+                text_fallback.append(f"@{part.display_name or part.target_id}")
+            elif isinstance(part, QuotePart):
+                text_fallback.append(f"[引用消息 {part.message_id}]")
+        fallback = "".join(text_fallback)
+        if supports_vision and rendered:
+            if fallback and not any(item.get("type") == "text" for item in rendered):
+                rendered.insert(0, {"type": "text", "text": fallback})
+            return rendered
+        return fallback or content
 
 
 default_chat_service = ChatService()

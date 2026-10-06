@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from datetime import timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -15,11 +16,27 @@ from sqlalchemy.pool import StaticPool
 
 from zhiyu.application.inbound import ChannelReliabilityService
 from zhiyu.channels.manager import ChannelManager
-from zhiyu.channels.messages import DeliveryReceipt
+from zhiyu.channels.messages import (
+    AudioPart,
+    DeliveryReceipt,
+    FilePart,
+    ImagePart,
+    MentionPart,
+    OutboundMessage,
+    QuotePart,
+    TextPart,
+)
 from zhiyu.channels.pipeline import AgentStage, DeliveryStage, InboundPipeline, RenderStage
 from zhiyu.channels.qq.adapter import QQAdapter
 from zhiyu.infrastructure.database.db import Base
 from zhiyu.infrastructure.database.models import ChannelDelivery, ChannelEvent
+from zhiyu.infrastructure.database.models import utcnow
+from zhiyu.infrastructure.database.repositories.channel_repository import (
+    ChannelGroupPolicyRepository,
+)
+from zhiyu.infrastructure.database.repositories.integration_repository import (
+    ChannelConfigRepository,
+)
 
 
 connect = partial(ws_connect, proxy=None)
@@ -216,6 +233,61 @@ def test_loopback_listener_allows_missing_access_token():
     assert adapter.access_token is None
 
 
+def test_media_only_message_is_preserved_as_structured_parts():
+    adapter = QQAdapter(AsyncMock(), "ws://127.0.0.1:6199/ws", owner_user_id="123")
+    event = adapter._to_event(
+        {
+            "post_type": "message",
+            "message_type": "private",
+            "user_id": 123,
+            "message_id": 7,
+            "message": [
+                {"type": "image", "data": {"url": "https://example.test/a.png"}},
+                {"type": "reply", "data": {"id": "6"}},
+            ],
+        }
+    )
+
+    assert event is not None
+    assert [part.type for part in event.parts] == ["image", "quote"]
+    assert event.text == ""
+    assert event.plain_text() == "[图片][引用消息]"
+
+
+async def test_outbound_components_render_to_onebot_segments():
+    adapter = QQAdapter(AsyncMock(), "ws://127.0.0.1:6199/ws", owner_user_id="123")
+    ws = AsyncMock()
+
+    async def reply(raw):
+        payload = json.loads(raw)
+        asyncio.get_running_loop().call_soon(
+            adapter._pending_requests[payload["echo"]].set_result,
+            {"status": "ok", "retcode": 0, "data": {}, "echo": payload["echo"]},
+        )
+
+    ws.send.side_effect = reply
+    adapter._ws = ws
+    receipt = await adapter.send(
+        OutboundMessage(
+            conversation_id="123",
+            parts=[
+                QuotePart(message_id="old"),
+                TextPart(text="看"),
+                MentionPart(target_id="456"),
+                ImagePart(source="https://example.test/a.png"),
+                AudioPart(source="https://example.test/a.mp3"),
+                FilePart(source="https://example.test/a.pdf", name="a.pdf"),
+            ],
+        )
+    )
+
+    payload = json.loads(ws.send.await_args.args[0])
+    assert receipt.status == "sent"
+    assert [item["type"] for item in payload["params"]["message"]] == [
+        "reply", "text", "at", "image", "record", "file"
+    ]
+
+
 async def test_persistent_dedup_and_delivery_receipt(unused_tcp_port):
     engine = create_engine(
         "sqlite://",
@@ -297,6 +369,163 @@ def test_group_policy_requires_explicit_enable_and_mention():
     assert enabled._is_allowed(mentioned) is True
     assert not_mentioned is not None
     assert enabled._is_allowed(not_mentioned) is False
+
+
+def test_persisted_group_policy_is_required_and_sets_tool_scope():
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine)
+    with sessions() as db:
+        config = ChannelConfigRepository().upsert(
+            db, "qq", "ws://127.0.0.1:6199/ws", None, owner_user_id="123"
+        )
+    reliability = ChannelReliabilityService(sessions)
+    adapter = QQAdapter(
+        AsyncMock(),
+        "ws://127.0.0.1:6199/ws",
+        owner_user_id="123",
+        channel_config_id=config.id,
+        reliability=reliability,
+    )
+    event = adapter._to_event(group_message())
+    assert event is not None
+    assert adapter._is_allowed(event) is False
+
+    with sessions() as db:
+        ChannelGroupPolicyRepository().upsert(
+            db,
+            config.id,
+            "456",
+            enabled=True,
+            require_mention=True,
+            tool_allowlist=["datetime"],
+            system_prompt="只回答项目问题",
+        )
+
+    assert adapter._is_allowed(event) is True
+    assert event.allowed_tools == ["datetime"]
+    assert event.system_prompt == "只回答项目问题"
+
+
+async def test_responded_event_recovers_without_running_agent(unused_tcp_port):
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine)
+    with sessions() as db:
+        config = ChannelConfigRepository().upsert(
+            db, "qq", f"ws://127.0.0.1:{unused_tcp_port}/ws", None, owner_user_id="123"
+        )
+    reliability = ChannelReliabilityService(sessions)
+    adapter = QQAdapter(
+        AsyncMock(),
+        config.endpoint,
+        owner_user_id="123",
+        channel_config_id=config.id,
+        reliability=reliability,
+    )
+    event = adapter._to_event(json.loads(private_message(message_id=88)))
+    assert event is not None and reliability.claim(event)
+    outbound = OutboundMessage.text(
+        "123", "已生成", source_event_id=event.event_id
+    )
+    reliability.responded(event.event_id, outbound)
+    ws = AsyncMock()
+
+    async def reply(raw):
+        payload = json.loads(raw)
+        asyncio.get_running_loop().call_soon(
+            adapter._pending_requests[payload["echo"]].set_result,
+            {"status": "ok", "retcode": 0, "data": {}, "echo": payload["echo"]},
+        )
+
+    ws.send.side_effect = reply
+    adapter._ws = ws
+
+    assert await adapter.recover_once() == 1
+    adapter.router.handle.assert_not_called()
+    with sessions() as db:
+        assert db.get(ChannelEvent, event.event_id).status == "completed"
+
+
+async def test_interrupted_pending_delivery_becomes_unknown_without_resend(unused_tcp_port):
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine)
+    with sessions() as db:
+        config = ChannelConfigRepository().upsert(
+            db, "qq", f"ws://127.0.0.1:{unused_tcp_port}/ws", None, owner_user_id="123"
+        )
+    reliability = ChannelReliabilityService(sessions)
+    adapter = QQAdapter(
+        AsyncMock(), config.endpoint, owner_user_id="123",
+        channel_config_id=config.id, reliability=reliability,
+    )
+    event = adapter._to_event(json.loads(private_message(message_id=89)))
+    assert event is not None and reliability.claim(event)
+    outbound = OutboundMessage.text("123", "已生成", source_event_id=event.event_id)
+    reliability.responded(event.event_id, outbound)
+    pending = reliability.create_delivery(
+        event.event_id,
+        "request-before-crash",
+        channel_config_id=config.id,
+        message=outbound,
+    )
+    adapter._ws = AsyncMock()
+
+    assert await adapter.recover_once() == 1
+    adapter._ws.send.assert_not_called()
+    with sessions() as db:
+        assert db.get(ChannelDelivery, pending.id).status == "unknown"
+        assert db.get(ChannelEvent, event.event_id).status == "completed"
+
+
+async def test_expired_processing_event_is_reclaimed(unused_tcp_port):
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine)
+    with sessions() as db:
+        config = ChannelConfigRepository().upsert(
+            db, "qq", f"ws://127.0.0.1:{unused_tcp_port}/ws", None, owner_user_id="123"
+        )
+    reliability = ChannelReliabilityService(sessions)
+    router = AsyncMock()
+    router.handle.return_value = "恢复完成"
+    adapter = QQAdapter(
+        router, config.endpoint, owner_user_id="123",
+        channel_config_id=config.id, reliability=reliability,
+    )
+    event = adapter._to_event(json.loads(private_message(message_id=90)))
+    assert event is not None and reliability.claim(event)
+    with sessions() as db:
+        stored = db.get(ChannelEvent, event.event_id)
+        stored.lease_expires_at = utcnow() - timedelta(seconds=1)
+        db.commit()
+    ws = AsyncMock()
+
+    async def reply(raw):
+        payload = json.loads(raw)
+        asyncio.get_running_loop().call_soon(
+            adapter._pending_requests[payload["echo"]].set_result,
+            {"status": "ok", "retcode": 0, "data": {}, "echo": payload["echo"]},
+        )
+
+    ws.send.side_effect = reply
+    adapter._ws = ws
+
+    assert await adapter.recover_once() == 1
+    router.handle.assert_awaited_once()
+    with sessions() as db:
+        stored = db.get(ChannelEvent, event.event_id)
+        assert stored.status == "completed"
+        assert stored.attempts == 2
 
 
 async def test_same_conversation_is_serial_and_different_conversations_run_parallel():

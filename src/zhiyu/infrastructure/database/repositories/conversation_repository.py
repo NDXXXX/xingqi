@@ -19,17 +19,48 @@ class ConversationRepository:
         return db.get(Conversation, conversation_id)
 
     def get_by_external(
-        self, db: Session, channel: str, external_user_id: str
+        self,
+        db: Session,
+        channel: str,
+        external_user_id: str,
+        *,
+        channel_config_id: str | None = None,
+        conversation_type: str | None = None,
     ) -> Conversation | None:
-        return db.scalars(
-            select(Conversation)
-            .where(Conversation.channel == channel, Conversation.external_user_id == external_user_id)
+        statement = select(Conversation).where(
+            Conversation.channel == channel,
+            Conversation.external_user_id == external_user_id,
+        )
+        if channel_config_id is not None:
+            statement = statement.where(
+                (Conversation.channel_config_id == channel_config_id)
+                | (Conversation.channel_config_id.is_(None))
+            )
+        if conversation_type is not None:
+            statement = statement.where(
+                (Conversation.external_conversation_type == conversation_type)
+                | (Conversation.external_conversation_type.is_(None))
+            )
+        conversation = db.scalars(
+            statement
             .order_by(
                 Conversation.updated_at.desc(),
                 Conversation.created_at.desc(),
                 Conversation.id.desc(),
             )
         ).first()
+        if conversation is not None:
+            changed = False
+            if channel_config_id is not None and conversation.channel_config_id is None:
+                conversation.channel_config_id = channel_config_id
+                changed = True
+            if conversation_type is not None and conversation.external_conversation_type is None:
+                conversation.external_conversation_type = conversation_type
+                changed = True
+            if changed:
+                db.commit()
+                db.refresh(conversation)
+        return conversation
 
     def create(
         self,
@@ -41,6 +72,8 @@ class ConversationRepository:
         external_user_id: str | None = None,
         model_id: str | None = None,
         identity_id: str | None = None,
+        channel_config_id: str | None = None,
+        external_conversation_type: str | None = None,
     ) -> Conversation:
         conversation = Conversation(
             id=str(uuid4()),
@@ -50,6 +83,8 @@ class ConversationRepository:
             external_user_id=external_user_id,
             model_id=model_id,
             identity_id=identity_id,
+            channel_config_id=channel_config_id,
+            external_conversation_type=external_conversation_type,
         )
         db.add(conversation)
         db.commit()

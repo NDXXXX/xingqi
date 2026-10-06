@@ -22,6 +22,10 @@ class Conversation(Base):
     title: Mapped[str] = mapped_column(String(255), default="New Chat")
     character_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     channel: Mapped[str] = mapped_column(String(32), default="local")
+    channel_config_id: Mapped[str | None] = mapped_column(
+        ForeignKey("channel_configs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    external_conversation_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     external_user_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     model_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     identity_id: Mapped[str | None] = mapped_column(ForeignKey("identities.id"), nullable=True, index=True)
@@ -43,6 +47,8 @@ class Message(Base):
     conversation_id: Mapped[str] = mapped_column(ForeignKey("conversations.id"), index=True)
     role: Mapped[str] = mapped_column(String(16))
     content: Mapped[str] = mapped_column(Text)
+    parts_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_event_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     conversation: Mapped["Conversation"] = relationship(back_populates="messages")
@@ -90,6 +96,7 @@ class ModelConfig(Base):
     display_name: Mapped[str] = mapped_column(String(255))
     supports_tools: Mapped[bool] = mapped_column(Boolean, default=True)
     supports_streaming: Mapped[bool] = mapped_column(Boolean, default=True)
+    supports_vision: Mapped[bool] = mapped_column(Boolean, default=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     context_window: Mapped[int | None] = mapped_column(nullable=True)
     max_output_tokens: Mapped[int | None] = mapped_column(nullable=True)
@@ -333,9 +340,14 @@ class Identity(Base):
 
 class ChannelConfig(Base):
     __tablename__ = "channel_configs"
+    __table_args__ = (
+        UniqueConstraint("channel", "account_id", name="uq_channel_config_account"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    channel: Mapped[str] = mapped_column(String(32), unique=True)
+    channel: Mapped[str] = mapped_column(String(32))
+    account_id: Mapped[str] = mapped_column(String(255), default="qq-onebot-default")
+    driver: Mapped[str] = mapped_column(String(64), default="onebot_reverse_ws")
     name: Mapped[str] = mapped_column(String(255))
     endpoint: Mapped[str] = mapped_column(String(500))
     secret_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -362,14 +374,25 @@ class ChannelEvent(Base):
 
     id: Mapped[str] = mapped_column(String(255), primary_key=True)
     channel: Mapped[str] = mapped_column(String(32))
+    channel_config_id: Mapped[str | None] = mapped_column(
+        ForeignKey("channel_configs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     account_id: Mapped[str] = mapped_column(String(255))
     external_event_id: Mapped[str] = mapped_column(String(255))
     conversation_key: Mapped[str] = mapped_column(String(1000))
     payload_json: Mapped[str] = mapped_column(Text)
-    status: Mapped[str] = mapped_column(String(32), default="processing")
+    status: Mapped[str] = mapped_column(String(32), default="pending")
     attempts: Mapped[int] = mapped_column(Integer, default=1)
+    available_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    lease_owner: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    response_message_id: Mapped[str | None] = mapped_column(
+        ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
+    )
+    outbound_message_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     received_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
@@ -383,13 +406,58 @@ class ChannelDelivery(Base):
     event_id: Mapped[str | None] = mapped_column(
         ForeignKey("channel_events.id", ondelete="SET NULL"), nullable=True
     )
+    channel_config_id: Mapped[str | None] = mapped_column(
+        ForeignKey("channel_configs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    retry_of_id: Mapped[str | None] = mapped_column(
+        ForeignKey("channel_deliveries.id", ondelete="SET NULL"), nullable=True
+    )
     request_id: Mapped[str] = mapped_column(String(255), unique=True)
+    message_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     provider_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="pending")
     attempts: Mapped[int] = mapped_column(Integer, default=1)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class ChannelGroupPolicy(Base):
+    __tablename__ = "channel_group_policies"
+    __table_args__ = (
+        UniqueConstraint(
+            "channel_config_id", "external_group_id", name="uq_channel_group_policy"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    channel_config_id: Mapped[str] = mapped_column(
+        ForeignKey("channel_configs.id", ondelete="CASCADE"), index=True
+    )
+    external_group_id: Mapped[str] = mapped_column(String(255))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    require_mention: Mapped[bool] = mapped_column(Boolean, default=True)
+    tool_allowlist_json: Mapped[str] = mapped_column(Text, default="[]")
+    system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class ChannelMediaAsset(Base):
+    __tablename__ = "channel_media_assets"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    channel_config_id: Mapped[str | None] = mapped_column(
+        ForeignKey("channel_configs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    source_event_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    relative_path: Mapped[str] = mapped_column(String(1000), unique=True)
+    mime_type: Mapped[str] = mapped_column(String(255))
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    sha256: Mapped[str] = mapped_column(String(64), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    last_accessed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
 
 
 class McpServerConfig(Base):
@@ -411,6 +479,12 @@ class AgentRun(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     conversation_id: Mapped[str] = mapped_column(ForeignKey("conversations.id"), index=True)
+    channel_event_id: Mapped[str | None] = mapped_column(
+        ForeignKey("channel_events.id", ondelete="SET NULL"), nullable=True, unique=True
+    )
+    response_message_id: Mapped[str | None] = mapped_column(
+        ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
+    )
     provider_id: Mapped[str] = mapped_column(ForeignKey("providers.id"))
     model_id: Mapped[str] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(32), default="pending")

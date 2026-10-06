@@ -15,8 +15,26 @@ class ChannelConfigRepository:
     def list_enabled(self, db: Session) -> list[ChannelConfig]:
         return list(db.scalars(select(ChannelConfig).where(ChannelConfig.enabled.is_(True))))
 
-    def get(self, db: Session, channel: str) -> ChannelConfig | None:
-        return db.scalars(select(ChannelConfig).where(ChannelConfig.channel == channel)).first()
+    def list_auto_connect(self, db: Session) -> list[ChannelConfig]:
+        return list(
+            db.scalars(
+                select(ChannelConfig).where(
+                    ChannelConfig.enabled.is_(True),
+                    ChannelConfig.auto_connect.is_(True),
+                )
+            )
+        )
+
+    def get(
+        self, db: Session, channel: str, account_id: str | None = None
+    ) -> ChannelConfig | None:
+        statement = select(ChannelConfig).where(ChannelConfig.channel == channel)
+        if account_id is not None:
+            statement = statement.where(ChannelConfig.account_id == account_id)
+        return db.scalars(statement.order_by(ChannelConfig.created_at)).first()
+
+    def get_by_id(self, db: Session, config_id: str) -> ChannelConfig | None:
+        return db.get(ChannelConfig, config_id)
 
     def upsert(
         self,
@@ -30,12 +48,16 @@ class ChannelConfigRepository:
         owner_user_id: str | None = None,
         allow_group_messages: bool | None = None,
         group_require_mention: bool | None = None,
+        account_id: str = "qq-onebot-default",
+        driver: str = "onebot_reverse_ws",
     ) -> ChannelConfig:
-        config = self.get(db, channel)
+        config = self.get(db, channel, account_id)
         if config is None:
             config = ChannelConfig(
                 id=str(uuid4()),
                 channel=channel,
+                account_id=account_id,
+                driver=driver,
                 name=channel.upper(),
                 endpoint=endpoint,
                 secret_ref=secret_ref,
@@ -50,6 +72,7 @@ class ChannelConfigRepository:
             db.add(config)
         else:
             config.endpoint = endpoint
+            config.driver = driver
             config.secret_ref = secret_ref
             config.owner_user_id = owner_user_id
             if allow_group_messages is not None:

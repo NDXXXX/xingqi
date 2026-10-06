@@ -11,19 +11,42 @@ from ..models import AgentRun, AgentRunStep, utcnow
 
 class AgentRunRepository:
     def create(
-        self, db: Session, conversation_id: str, provider_id: str, model_id: str
+        self,
+        db: Session,
+        conversation_id: str,
+        provider_id: str,
+        model_id: str,
+        *,
+        channel_event_id: str | None = None,
     ) -> AgentRun:
+        if channel_event_id:
+            existing = self.get_by_event(db, channel_event_id)
+            if existing is not None:
+                existing.status = "running"
+                existing.error = None
+                existing.finished_at = None
+                db.commit()
+                db.refresh(existing)
+                return existing
         run = AgentRun(
             id=str(uuid4()),
             conversation_id=conversation_id,
             provider_id=provider_id,
             model_id=model_id,
+            channel_event_id=channel_event_id,
             status="running",
         )
         db.add(run)
         db.commit()
         db.refresh(run)
         return run
+
+    def get_by_event(self, db: Session, channel_event_id: str) -> AgentRun | None:
+        return db.scalars(
+            select(AgentRun)
+            .options(selectinload(AgentRun.steps))
+            .where(AgentRun.channel_event_id == channel_event_id)
+        ).first()
 
     def get(self, db: Session, run_id: str) -> AgentRun | None:
         return db.scalars(
@@ -71,6 +94,7 @@ class AgentRunRepository:
         completion_tokens: int | None = None,
         provider_id: str | None = None,
         model_id: str | None = None,
+        response_message_id: str | None = None,
     ) -> None:
         run = db.get(AgentRun, run_id)
         if run is None:
@@ -86,6 +110,8 @@ class AgentRunRepository:
             run.provider_id = provider_id
         if model_id is not None:
             run.model_id = model_id
+        if response_message_id is not None:
+            run.response_message_id = response_message_id
         db.commit()
 
     @staticmethod

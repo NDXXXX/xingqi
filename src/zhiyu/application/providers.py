@@ -114,6 +114,19 @@ class ProviderService:
                 {"provider_id": provider.id, "model_id": model.id},
             )
 
+    def set_vision(self, provider_name: str, model_name: str, enabled: bool) -> None:
+        with self.session_factory() as db:
+            provider = self.providers.get_by_name(db, provider_name)
+            if provider is None or not provider.enabled:
+                raise ValueError("Provider 不存在或未启用")
+            model = next(
+                (item for item in provider.models if item.model_name == model_name),
+                None,
+            )
+            if model is None:
+                raise ValueError("模型不存在")
+            self.providers.update_model(db, model, supports_vision=enabled)
+
     def set_fallbacks(self, provider_name: str, fallback_names: list[str]) -> None:
         with self.session_factory() as db:
             provider = self.providers.get_by_name(db, provider_name)

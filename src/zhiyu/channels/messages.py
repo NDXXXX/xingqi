@@ -52,6 +52,7 @@ class InboundEvent(BaseModel):
     event_id: str = Field(default_factory=lambda: str(uuid4()))
     channel: str
     account_id: str
+    channel_config_id: str | None = None
     conversation_id: str
     conversation_type: Literal["private", "group", "channel"]
     sender_id: str
@@ -62,10 +63,19 @@ class InboundEvent(BaseModel):
     parts: list[MessagePart]
     received_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     raw: dict = Field(default_factory=dict)
+    allowed_tools: list[str] | None = None
+    system_prompt: str | None = None
 
     @property
     def text(self) -> str:
         return "".join(part.text for part in self.parts if isinstance(part, TextPart))
+
+    def plain_text(self) -> str:
+        return OutboundMessage(
+            conversation_id=self.conversation_id,
+            conversation_type=self.conversation_type,
+            parts=self.parts,
+        ).plain_text()
 
     @property
     def external_user_id(self) -> str:

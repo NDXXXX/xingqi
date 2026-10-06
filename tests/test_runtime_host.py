@@ -68,3 +68,24 @@ async def test_runtime_host_context_manager_always_stops():
 
     assert host.started is False
     channel_manager.close_all.assert_awaited_once()
+
+
+async def test_runtime_host_auto_starts_configured_channels():
+    memory_processor = Mock(kick=Mock(), stop=AsyncMock(), status=Mock(return_value={}))
+    chat_service = Mock(memory_processor=memory_processor, session_factory=Mock())
+    channel_manager = Mock(close_all=AsyncMock(), list=Mock(return_value=[]))
+    channel_service = Mock(start_auto_connect=AsyncMock(return_value=["ws://127.0.0.1:6199/ws"]))
+    mcp_manager = Mock(close_all=AsyncMock(), servers=Mock(return_value=[]))
+    host = RuntimeHost(
+        chat_service=chat_service,
+        channel_manager=channel_manager,
+        channel_service=channel_service,
+        mcp_manager=mcp_manager,
+        skill_registry=Mock(reload=Mock()),
+        auto_connect_mcp=False,
+    )
+
+    await host.start()
+    await host.stop()
+
+    channel_service.start_auto_connect.assert_awaited_once()

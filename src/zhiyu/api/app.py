@@ -194,6 +194,18 @@ def create_app(host: RuntimeHost | None = None) -> FastAPI:
     async def list_channels():
         return runtime.channel_manager.list()
 
+    @app.get("/api/channel-events")
+    async def list_channel_events(limit: int = Query(default=50, ge=1, le=200)):
+        return runtime.channel_service.list_events(limit)
+
+    @app.get("/api/qq/groups")
+    async def list_qq_groups():
+        return runtime.channel_service.list_group_policies()
+
+    @app.get("/api/channel-deliveries")
+    async def list_channel_deliveries(limit: int = Query(default=50, ge=1, le=200)):
+        return runtime.channel_service.list_deliveries(limit)
+
     static_dir = Path(__file__).parents[1] / "web" / "static"
     app.mount("/", StaticFiles(directory=static_dir, html=True), name="web")
     return app

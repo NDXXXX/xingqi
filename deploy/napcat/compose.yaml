@@ -1,0 +1,20 @@
+services:
+  napcat:
+    image: mlikiowa/napcat-docker@sha256:335f9310198504d8d07aba91cc91d89215269891919c26eb4e46052ff8bb176d
+    container_name: zhiyu-napcat
+    restart: unless-stopped
+    environment:
+      NAPCAT_UID: "${NAPCAT_UID:-501}"
+      NAPCAT_GID: "${NAPCAT_GID:-20}"
+      TZ: "${TZ:-Asia/Shanghai}"
+    ports:
+      - "127.0.0.1:${NAPCAT_WEBUI_PORT:-6099}:6099"
+    volumes:
+      - "${ZHIYU_NAPCAT_DATA_DIR:?set ZHIYU_NAPCAT_DATA_DIR}/config:/app/napcat/config"
+      - "${ZHIYU_NAPCAT_DATA_DIR:?set ZHIYU_NAPCAT_DATA_DIR}/qq:/app/.config/QQ"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6099'"]
+      interval: 15s
+      timeout: 3s
+      retries: 10
+      start_period: 30s

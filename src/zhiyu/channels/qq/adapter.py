@@ -13,14 +13,27 @@ from uuid import uuid4
 from websockets.asyncio.server import serve
 
 from ..base import ChannelAdapter
-from ..messages import DeliveryReceipt, InboundEvent, OutboundMessage, TextPart
+from ..media import MediaStore
+from ..messages import (
+    AudioPart,
+    DeliveryReceipt,
+    FilePart,
+    ImagePart,
+    InboundEvent,
+    MentionPart,
+    OutboundMessage,
+    QuotePart,
+    TextPart,
+)
 from ..pipeline import (
     AgentStage,
     CommandStage,
     DedupStage,
     DeliveryStage,
     InboundPipeline,
+    NormalizeStage,
     PolicyStage,
+    PersistResponseStage,
     RenderStage,
     SessionStage,
 )
@@ -41,6 +54,7 @@ class QQAdapter(ChannelAdapter):
         on_status: Callable[[str, str | None, int], None] | None = None,
         owner_user_id: str | None = None,
         account_id: str = "qq-onebot-default",
+        channel_config_id: str | None = None,
         allow_group_messages: bool = False,
         group_require_mention: bool = True,
         reliability=None,
@@ -52,6 +66,7 @@ class QQAdapter(ChannelAdapter):
         self.access_token = access_token
         self.owner_user_id = owner_user_id
         self.account_id = account_id
+        self.channel_config_id = channel_config_id
         self.allow_group_messages = allow_group_messages
         self.group_require_mention = group_require_mention
         self.reliability = reliability
@@ -63,6 +78,10 @@ class QQAdapter(ChannelAdapter):
         self._conversation_locks: dict[str, asyncio.Lock] = {}
         self._message_slots = asyncio.Semaphore(max_concurrency)
         self._claimed_event_ids: set[str] = set()
+        self._connected_self_id: str | None = None
+        self.media_store = (
+            MediaStore(reliability.session_factory) if reliability is not None else None
+        )
         endpoint = urlsplit(ws_url)
         if (endpoint.scheme != "ws" or not endpoint.hostname or not endpoint.port
                 or endpoint.username or endpoint.password or endpoint.query or endpoint.fragment):
@@ -76,10 +95,12 @@ class QQAdapter(ChannelAdapter):
             [
                 PolicyStage(self._is_allowed),
                 DedupStage(self._is_duplicate),
+                NormalizeStage(self._normalize_event),
                 SessionStage(),
                 CommandStage({"/new": self._new_session}),
                 AgentStage(self.router.handle),
                 RenderStage(),
+                PersistResponseStage(self._persist_response),
                 DeliveryStage(self.send),
             ]
         )
@@ -117,6 +138,12 @@ class QQAdapter(ChannelAdapter):
             await ws.close(code=1008, reason="QQ is already connected")
             return
         self._ws = ws
+        observed_self_id = ws.request.headers.get("X-Self-ID")
+        if self._connected_self_id and observed_self_id and observed_self_id != self._connected_self_id:
+            await ws.close(code=1008, reason="QQ account changed")
+            return
+        if observed_self_id:
+            self._connected_self_id = observed_self_id
         self._status("connected")
         queue = asyncio.Queue(maxsize=64)
         inflight: set[asyncio.Task] = set()
@@ -193,7 +220,9 @@ class QQAdapter(ChannelAdapter):
                 result = await self._pipeline.execute(event)
             except Exception as exc:
                 if self.reliability is not None and event.event_id in self._claimed_event_ids:
-                    self.reliability.fail(event.event_id, str(exc))
+                    self.reliability.retry_or_fail(
+                        event.event_id, str(exc), retryable=not isinstance(exc, ValueError)
+                    )
                 raise
             else:
                 if (
@@ -212,8 +241,8 @@ class QQAdapter(ChannelAdapter):
         if message_type not in {"private", "group"}:
             return None
         user_id = str(data.get("user_id", ""))
-        text = self._extract_text(data.get("message"))
-        if not user_id or not text:
+        parts = self._extract_parts(data.get("message"))
+        if not user_id or not parts:
             return None
         if message_type == "group":
             conversation_id = str(data.get("group_id", ""))
@@ -232,37 +261,60 @@ class QQAdapter(ChannelAdapter):
             **event_data,
             channel="qq",
             account_id=self.account_id,
+            channel_config_id=self.channel_config_id,
             conversation_id=conversation_id,
             conversation_type=message_type,
             sender_id=user_id,
             sender_name=(data.get("sender") or {}).get("nickname"),
             message_id=str(message_id) if message_id is not None else None,
+            reply_to_id=next(
+                (part.message_id for part in parts if isinstance(part, QuotePart)), None
+            ),
             mentioned_agent=self._mentioned_agent(data),
-            parts=[TextPart(text=text)],
-            raw=data,
+            parts=parts,
+            raw={
+                "post_type": data.get("post_type"),
+                "message_type": message_type,
+                "message_id": message_id,
+                "self_id": data.get("self_id"),
+                "user_id": data.get("user_id"),
+                "group_id": data.get("group_id"),
+            },
         )
         return event
 
     async def send(self, message: OutboundMessage) -> DeliveryReceipt:
+        chunks = self._split_message(message)
+        receipt: DeliveryReceipt | None = None
+        for chunk in chunks:
+            receipt = await self._send_one(chunk)
+            if receipt.status != "sent":
+                return receipt
+        return receipt or DeliveryReceipt(status="failed", error="空消息")
+
+    async def _send_one(self, message: OutboundMessage) -> DeliveryReceipt:
         if self._ws is None:
             raise ConnectionError("NapCat 尚未连接")
         request_id = str(uuid4())
+        pending_delivery = None
+        if self.reliability is not None:
+            pending_delivery = self.reliability.create_delivery(
+                message.source_event_id,
+                request_id,
+                channel_config_id=self.channel_config_id,
+                message=message,
+            )
+            request_id = pending_delivery.request_id
         action = "send_group_msg" if message.conversation_type == "group" else "send_private_msg"
         target_key = "group_id" if message.conversation_type == "group" else "user_id"
         payload = {
             "action": action,
             "params": {
                 target_key: int(message.conversation_id),
-                "message": [{"type": "text", "data": {"text": message.plain_text()}}],
+                "message": self._to_onebot_segments(message),
             },
             "echo": request_id,
         }
-        pending_delivery = None
-        if self.reliability is not None:
-            pending_delivery = self.reliability.create_delivery(
-                message.source_event_id,
-                request_id,
-            )
         future = asyncio.get_running_loop().create_future()
         self._pending_requests[request_id] = future
         try:
@@ -311,13 +363,24 @@ class QQAdapter(ChannelAdapter):
             return False
         if event.conversation_type == "private":
             return True
+        if self.channel_config_id and self.reliability is not None:
+            from zhiyu.infrastructure.database.repositories.channel_repository import (
+                ChannelGroupPolicyRepository,
+            )
+
+            policies = ChannelGroupPolicyRepository()
+            with self.reliability.session_factory() as db:
+                policy = policies.get(db, self.channel_config_id, event.conversation_id)
+                if policy is None or not policy.enabled:
+                    return False
+                event.allowed_tools = policies.tool_allowlist(policy)
+                event.system_prompt = policy.system_prompt
+                return not policy.require_mention or event.mentioned_agent
         return self.allow_group_messages and (
             not self.group_require_mention or event.mentioned_agent
         )
 
     async def _new_session(self, event: InboundEvent) -> str:
-        if event.conversation_type != "private":
-            return "群聊暂不支持手动新建会话。"
         return await self.router.new_session(event)
 
     def _is_duplicate(self, event: InboundEvent) -> bool:
@@ -327,6 +390,71 @@ class QQAdapter(ChannelAdapter):
         if claimed:
             self._claimed_event_ids.add(event.event_id)
         return not claimed
+
+    def _persist_response(self, event: InboundEvent, message: OutboundMessage) -> None:
+        if self.reliability is not None:
+            self.reliability.responded(event.event_id, message)
+
+    async def _normalize_event(self, event: InboundEvent) -> InboundEvent:
+        if self.media_store is not None:
+            event = await self.media_store.materialize_event(event)
+        if self.reliability is not None:
+            self.reliability.update_payload(event)
+        return event
+
+    async def recover_once(self) -> int:
+        if self.reliability is None or self.channel_config_id is None or self._ws is None:
+            return 0
+        recovered = 0
+        for event_id, status, payload_json in self.reliability.recoverable(
+            self.channel_config_id
+        ):
+            if status == "responded":
+                if self.reliability.close_interrupted_delivery(event_id):
+                    recovered += 1
+                    continue
+                outbound = self.reliability.queued_outbound_for(
+                    event_id
+                ) or self.reliability.outbound_for(event_id)
+                if outbound is None:
+                    self.reliability.fail(event_id, "已生成事件缺少出站消息快照")
+                    continue
+                receipt = await self.send(outbound)
+                self.reliability.complete(event_id)
+                recovered += 1
+                if receipt.status == "unknown":
+                    logger.warning("Recovered QQ delivery has unknown result: %s", event_id)
+                continue
+            if not self.reliability.reclaim(event_id):
+                continue
+            event = InboundEvent.model_validate_json(payload_json)
+            self._claimed_event_ids.add(event.event_id)
+            try:
+                result = await self._recovery_pipeline().execute(event)
+            except Exception as exc:
+                self.reliability.retry_or_fail(
+                    event.event_id, str(exc), retryable=not isinstance(exc, ValueError)
+                )
+            else:
+                self.reliability.complete(event.event_id)
+                recovered += 1
+            finally:
+                self._claimed_event_ids.discard(event.event_id)
+        return recovered
+
+    def _recovery_pipeline(self) -> InboundPipeline:
+        return InboundPipeline(
+            [
+                PolicyStage(self._is_allowed),
+                NormalizeStage(self._normalize_event),
+                SessionStage(),
+                CommandStage({"/new": self._new_session}),
+                AgentStage(self.router.handle),
+                RenderStage(),
+                PersistResponseStage(self._persist_response),
+                DeliveryStage(self.send),
+            ]
+        )
 
     @staticmethod
     def _decode(raw: str) -> dict | None:
@@ -360,6 +488,109 @@ class QQAdapter(ChannelAdapter):
                     parts.append(seg.get("data", {}).get("text", ""))
             return "".join(parts)
         return ""
+
+    @staticmethod
+    def _extract_parts(message) -> list:
+        if isinstance(message, str):
+            return [TextPart(text=message)] if message else []
+        if not isinstance(message, list):
+            return []
+        parts = []
+        for segment in message:
+            if not isinstance(segment, dict):
+                continue
+            segment_type = segment.get("type")
+            data = segment.get("data") or {}
+            if segment_type == "text" and data.get("text"):
+                parts.append(TextPart(text=str(data["text"])))
+            elif segment_type == "at" and data.get("qq") is not None:
+                parts.append(
+                    MentionPart(
+                        target_id=str(data["qq"]),
+                        display_name=data.get("name"),
+                    )
+                )
+            elif segment_type == "reply" and data.get("id") is not None:
+                parts.append(QuotePart(message_id=str(data["id"])))
+            elif segment_type == "image":
+                source = data.get("url") or data.get("file")
+                if source:
+                    parts.append(
+                        ImagePart(source=str(source), mime_type=data.get("mime_type"))
+                    )
+            elif segment_type == "record":
+                source = data.get("url") or data.get("file")
+                if source:
+                    parts.append(
+                        AudioPart(source=str(source), mime_type=data.get("mime_type"))
+                    )
+            elif segment_type == "file":
+                source = data.get("url") or data.get("file")
+                if source:
+                    parts.append(
+                        FilePart(
+                            source=str(source),
+                            name=data.get("name"),
+                            mime_type=data.get("mime_type"),
+                        )
+                    )
+        return parts
+
+    def _to_onebot_segments(self, message: OutboundMessage) -> list[dict]:
+        segments: list[dict] = []
+        for part in message.parts:
+            if isinstance(part, TextPart):
+                if part.text:
+                    segments.append({"type": "text", "data": {"text": part.text}})
+            elif isinstance(part, MentionPart):
+                segments.append({"type": "at", "data": {"qq": part.target_id}})
+            elif isinstance(part, QuotePart):
+                segments.append({"type": "reply", "data": {"id": part.message_id}})
+            elif isinstance(part, ImagePart):
+                source = self.media_store.onebot_source(part.source) if self.media_store else part.source
+                segments.append({"type": "image", "data": {"file": source}})
+            elif isinstance(part, AudioPart):
+                source = self.media_store.onebot_source(part.source) if self.media_store else part.source
+                segments.append({"type": "record", "data": {"file": source}})
+            elif isinstance(part, FilePart):
+                source = self.media_store.onebot_source(part.source) if self.media_store else part.source
+                data = {"file": source}
+                if part.name:
+                    data["name"] = part.name
+                segments.append({"type": "file", "data": data})
+        return segments or [{"type": "text", "data": {"text": message.plain_text()}}]
+
+    @staticmethod
+    def _split_message(message: OutboundMessage, limit: int = 4000) -> list[OutboundMessage]:
+        if len(message.parts) != 1 or not isinstance(message.parts[0], TextPart):
+            return [message]
+        text = message.parts[0].text
+        if len(text) <= limit:
+            return [message]
+        chunks: list[str] = []
+        remaining = text
+        while remaining:
+            if len(remaining) <= limit:
+                chunks.append(remaining)
+                break
+            cut = max(
+                remaining.rfind("\n", 0, limit + 1),
+                remaining.rfind("。", 0, limit + 1),
+                remaining.rfind("！", 0, limit + 1),
+                remaining.rfind("？", 0, limit + 1),
+            )
+            cut = cut + 1 if cut >= limit // 2 else limit
+            chunks.append(remaining[:cut])
+            remaining = remaining[cut:]
+        return [
+            OutboundMessage.text(
+                message.conversation_id,
+                chunk,
+                conversation_type=message.conversation_type,
+                source_event_id=message.source_event_id,
+            )
+            for chunk in chunks
+        ]
 
     @staticmethod
     def _is_loopback_host(host: str) -> bool:

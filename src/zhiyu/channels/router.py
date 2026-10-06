@@ -14,21 +14,29 @@ class ChannelRouter:
         event = message.to_event() if isinstance(message, IncomingMessage) else message
         result = await self.chat_service.complete(
             ChatRequest(
-                message=event.text,
+                message=event.plain_text(),
                 channel=event.channel,
                 external_user_id=event.sender_id,
                 external_conversation_id=event.conversation_id,
+                external_conversation_type=event.conversation_type,
+                channel_config_id=event.channel_config_id,
+                channel_event_id=event.event_id,
+                parts=event.parts,
+                allowed_tools=event.allowed_tools,
+                system_prompt=event.system_prompt,
             )
         )
         return result.response
 
     async def new_session(self, message: InboundEvent | IncomingMessage) -> str:
         event = message.to_event() if isinstance(message, IncomingMessage) else message
-        if event.channel != "qq" or event.conversation_type != "private":
-            raise ValueError("仅支持 QQ 私聊新建 Session")
+        if event.channel != "qq":
+            raise ValueError("目前仅支持 QQ 新建 Session")
         self.chat_service.new_channel_session(
             event.channel,
             event.sender_id,
             event.conversation_id,
+            channel_config_id=event.channel_config_id,
+            conversation_type=event.conversation_type,
         )
         return "已开启新的对话。"

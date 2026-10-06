@@ -38,13 +38,17 @@ async function json(url, options) {
 
 async function loadRuntime() {
   try {
-    const [health, providers, channels] = await Promise.all([
-      json("/api/health"), json("/api/providers"), json("/api/channels")
+    const [health, providers, channels, events] = await Promise.all([
+      json("/api/health"), json("/api/providers"), json("/api/channels"),
+      json("/api/channel-events?limit=50")
     ]);
     $("#health-dot").classList.add("ok");
     $("#health-text").textContent = "本地服务运行中";
     const qq = channels.find((item) => item.channel === "qq");
-    $("#runtime-detail").textContent = qq?.status === "connected" ? "QQ 已连接" : "QQ 未连接";
+    const failed = events.filter((item) => item.status === "failed").length;
+    const pending = events.filter((item) => ["pending", "processing", "responded"].includes(item.status)).length;
+    const qqStatus = qq?.status === "connected" ? "QQ 已连接" : `QQ ${qq?.status || "未连接"}`;
+    $("#runtime-detail").textContent = `${qqStatus} · 待处理 ${pending} · 失败 ${failed}`;
     const first = providers.find((item) => item.enabled && item.configured);
     $("#model-badge").textContent = first ? `${first.name} · ${first.models[0] || "未选模型"}` : "未配置模型";
     if (!health.started) $("#health-text").textContent = "服务正在启动";
