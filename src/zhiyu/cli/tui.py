@@ -203,7 +203,7 @@ class ChatApp(App):
 
     @work(exclusive=True)
     async def _stream(self, text: str) -> None:
-        from zhiyu.cli.main import RED, _tool_lines
+        from zhiyu.cli.commands.chat import RED, _tool_lines
 
         messages = self.query_one("#messages", VerticalScroll)
         tools = Static("", classes="tool")

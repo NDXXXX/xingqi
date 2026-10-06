@@ -1,6 +1,6 @@
 """CLI 对话渲染测试（工具卡片、颜色、打印模型）。"""
 
-from zhiyu.cli import main as cli
+from zhiyu.cli.commands import chat as cli
 
 
 def test_tool_lines_off_is_single_line():

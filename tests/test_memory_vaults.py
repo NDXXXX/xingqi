@@ -615,7 +615,8 @@ def test_forget_recovery_finishes_orphaned_core_cascade(tmp_path, monkeypatch):
         conversation_id = conversation.id
 
     service = MemoryService(factory, store=store)
-    remove_from_file = service._remove_from_file
+    lifecycle = service._lifecycle
+    remove_from_file = lifecycle._remove_from_file
     calls = 0
 
     def crash_before_second_remove(*args, **kwargs):
@@ -625,7 +626,7 @@ def test_forget_recovery_finishes_orphaned_core_cascade(tmp_path, monkeypatch):
             raise RuntimeError("simulated crash")
         return remove_from_file(*args, **kwargs)
 
-    monkeypatch.setattr(service, "_remove_from_file", crash_before_second_remove)
+    monkeypatch.setattr(lifecycle, "_remove_from_file", crash_before_second_remove)
     with pytest.raises(RuntimeError, match="simulated crash"):
         service.forget_conversation(conversation_id)
 
