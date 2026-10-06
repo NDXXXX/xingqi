@@ -8,7 +8,7 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import ChannelConfig, McpServerConfig
+from ..models import ChannelConfig, InstalledSkill, McpRuntimeState, McpServerConfig, utcnow
 
 
 class ChannelConfigRepository:
@@ -118,24 +118,31 @@ class McpConfigRepository:
         args: list[str],
         *,
         tool_allowlist: list[str] | None = None,
+        enabled: bool = True,
     ) -> McpServerConfig:
         config = self.get(db, name)
         if config is None:
             config = McpServerConfig(
                 id=str(uuid4()),
                 name=name,
+                transport="stdio",
                 command=command,
                 args_json=json.dumps(args, ensure_ascii=False),
                 tool_allowlist_json=json.dumps(tool_allowlist or [], ensure_ascii=False),
+                legacy_all_tools=False,
+                enabled=enabled,
+                auto_connect=enabled,
             )
             db.add(config)
         else:
+            config.transport = "stdio"
             config.command = command
             config.args_json = json.dumps(args, ensure_ascii=False)
             if tool_allowlist is not None:
                 config.tool_allowlist_json = json.dumps(tool_allowlist, ensure_ascii=False)
-            config.enabled = True
-            config.auto_connect = True
+                config.legacy_all_tools = False
+            config.enabled = enabled
+            config.auto_connect = enabled
         db.commit()
         db.refresh(config)
         return config
@@ -147,6 +154,34 @@ class McpConfigRepository:
             config.auto_connect = False
             db.commit()
 
+    def set_enabled(self, db: Session, name: str, enabled: bool) -> McpServerConfig:
+        config = self.get(db, name)
+        if config is None:
+            raise ValueError("MCP Server 不存在")
+        config.enabled = enabled
+        config.auto_connect = enabled
+        db.commit()
+        db.refresh(config)
+        return config
+
+    def update_fields(self, db: Session, name: str, **fields) -> McpServerConfig:
+        config = self.get(db, name)
+        if config is None:
+            raise ValueError("MCP Server 不存在")
+        for key, value in fields.items():
+            setattr(config, key, value)
+        config.updated_at = utcnow()
+        db.commit()
+        db.refresh(config)
+        return config
+
+    def remove(self, db: Session, name: str) -> McpServerConfig | None:
+        config = self.get(db, name)
+        if config is not None:
+            db.delete(config)
+            db.commit()
+        return config
+
     @staticmethod
     def args(config: McpServerConfig) -> list[str]:
         value = json.loads(config.args_json)
@@ -156,3 +191,60 @@ class McpConfigRepository:
     def tool_allowlist(config: McpServerConfig) -> list[str]:
         value = json.loads(config.tool_allowlist_json)
         return value if isinstance(value, list) else []
+
+    @staticmethod
+    def json_field(config: McpServerConfig, field: str) -> dict | list:
+        value = json.loads(getattr(config, field))
+        return value if isinstance(value, (dict, list)) else {}
+
+
+class McpRuntimeStateRepository:
+    def get(self, db: Session, server_config_id: str) -> McpRuntimeState | None:
+        return db.get(McpRuntimeState, server_config_id)
+
+    def upsert(self, db: Session, server_config_id: str, **values) -> McpRuntimeState:
+        state = self.get(db, server_config_id)
+        if state is None:
+            state = McpRuntimeState(
+                server_config_id=server_config_id,
+                status="stopped",
+                updated_at=utcnow(),
+            )
+            db.add(state)
+        for key, value in values.items():
+            setattr(state, key, value)
+        state.updated_at = utcnow()
+        db.commit()
+        db.refresh(state)
+        return state
+
+    def delete(self, db: Session, server_config_id: str) -> None:
+        state = self.get(db, server_config_id)
+        if state is not None:
+            db.delete(state)
+            db.commit()
+
+
+class InstalledSkillRepository:
+    def list(self, db: Session) -> list[InstalledSkill]:
+        return list(db.scalars(select(InstalledSkill).order_by(InstalledSkill.name)))
+
+    def get(self, db: Session, name: str) -> InstalledSkill | None:
+        return db.get(InstalledSkill, name)
+
+    def save(self, db: Session, **values) -> InstalledSkill:
+        item = self.get(db, values["name"])
+        if item is None:
+            item = InstalledSkill(**values)
+            db.add(item)
+        else:
+            for key, value in values.items():
+                setattr(item, key, value)
+            item.updated_at = utcnow()
+        db.flush()
+        return item
+
+    def delete(self, db: Session, name: str) -> None:
+        item = self.get(db, name)
+        if item is not None:
+            db.delete(item)

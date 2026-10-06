@@ -465,13 +465,56 @@ class McpServerConfig(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     name: Mapped[str] = mapped_column(String(255), unique=True)
-    command: Mapped[str] = mapped_column(String(500))
+    transport: Mapped[str] = mapped_column(String(32), default="stdio")
+    command: Mapped[str | None] = mapped_column(String(500), nullable=True)
     args_json: Mapped[str] = mapped_column(Text, default="[]")
+    url: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    env_json: Mapped[str] = mapped_column(Text, default="{}")
+    secret_refs_json: Mapped[str] = mapped_column(Text, default="{}")
     tool_allowlist_json: Mapped[str] = mapped_column(Text, default="[]")
+    legacy_all_tools: Mapped[bool] = mapped_column(Boolean, default=False)
+    resource_allowlist_json: Mapped[str] = mapped_column(Text, default="[]")
+    prompt_allowlist_json: Mapped[str] = mapped_column(Text, default="[]")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     auto_connect: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class McpRuntimeState(Base):
+    __tablename__ = "mcp_runtime_states"
+
+    server_config_id: Mapped[str] = mapped_column(
+        ForeignKey("mcp_server_configs.id", ondelete="CASCADE"), primary_key=True
+    )
+    status: Mapped[str] = mapped_column(String(32), default="stopped")
+    connected_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    server_info_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    capabilities_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class InstalledSkill(Base):
+    __tablename__ = "installed_skills"
+
+    name: Mapped[str] = mapped_column(String(255), primary_key=True)
+    source_type: Mapped[str] = mapped_column(String(32))
+    source_locator: Mapped[str] = mapped_column(Text)
+    source_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    resolved_revision: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    content_hash: Mapped[str] = mapped_column(String(64))
+    installed_path: Mapped[str] = mapped_column(String(1000))
+    manifest_json: Mapped[str] = mapped_column(Text, default="{}")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    installed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    trashed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class AgentRun(Base):

@@ -21,7 +21,9 @@ class ProviderRepository:
         ).first()
 
     def get_by_name(self, db: Session, name: str) -> Provider | None:
-        return db.scalars(select(Provider).where(Provider.name == name)).first()
+        return db.scalars(
+            select(Provider).options(selectinload(Provider.models)).where(Provider.name == name)
+        ).first()
 
     def create(
         self,

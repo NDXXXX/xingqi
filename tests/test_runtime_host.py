@@ -3,6 +3,14 @@ from unittest.mock import AsyncMock, Mock
 from zhiyu.application.runtime import RuntimeHost
 
 
+def _skill_service():
+    return Mock(
+        register_existing=Mock(return_value=0),
+        enabled_overrides=Mock(return_value={}),
+        purge_expired=Mock(),
+    )
+
+
 async def test_runtime_host_starts_and_stops_owned_services():
     memory_processor = Mock()
     memory_processor.kick = Mock()
@@ -20,6 +28,7 @@ async def test_runtime_host_starts_and_stops_owned_services():
         chat_service=chat_service,
         channel_manager=channel_manager,
         mcp_manager=mcp_manager,
+        skill_service=_skill_service(),
         skill_registry=skills,
         auto_connect_mcp=False,
     )
@@ -59,6 +68,7 @@ async def test_runtime_host_context_manager_always_stops():
         chat_service=chat_service,
         channel_manager=channel_manager,
         mcp_manager=mcp_manager,
+        skill_service=_skill_service(),
         skill_registry=skills,
         auto_connect_mcp=False,
     )
@@ -81,6 +91,7 @@ async def test_runtime_host_auto_starts_configured_channels():
         channel_manager=channel_manager,
         channel_service=channel_service,
         mcp_manager=mcp_manager,
+        skill_service=_skill_service(),
         skill_registry=Mock(reload=Mock()),
         auto_connect_mcp=False,
     )

@@ -1,9 +1,6 @@
 """Character 系统提示词组装。"""
 
-from zhiyu.infrastructure.database.models import Character
-
-
-def build_system_prompt(character: Character) -> str:
+def build_system_prompt(character) -> str:
     """有自定义 system_prompt 用自定义，否则按字段拼接 persona。"""
     if character.system_prompt and character.system_prompt.strip():
         return character.system_prompt.strip()

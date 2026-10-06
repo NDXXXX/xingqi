@@ -5,14 +5,14 @@ import logging
 
 from zhiyu.application.chat import ChatService
 from zhiyu.application.channels import ChannelService
+from zhiyu.application.mcp import CONFIG_REVISION_KEY, McpService
+from zhiyu.application.skills import SkillService
 from zhiyu.channels.media import MediaStore
 from zhiyu.channels.manager import ChannelManager
 from zhiyu.channels.router import ChannelRouter
 from zhiyu.integrations.mcp.manager import McpManager
 from zhiyu.integrations.skills.registry import SkillRegistry, default_registry
-from zhiyu.infrastructure.database.repositories.integration_repository import (
-    McpConfigRepository,
-)
+from zhiyu.infrastructure.database.repositories.setting_repository import SettingRepository
 
 
 logger = logging.getLogger(__name__)
@@ -26,6 +26,7 @@ class RuntimeHost:
         channel_manager: ChannelManager | None = None,
         channel_service: ChannelService | None = None,
         mcp_manager: McpManager | None = None,
+        skill_service: SkillService | None = None,
         skill_registry: SkillRegistry = default_registry,
         auto_connect_mcp: bool = True,
         auto_connect_channels: bool = True,
@@ -42,12 +43,19 @@ class RuntimeHost:
         self.auto_connect_channels = auto_connect_channels and (
             channel_service is not None or isinstance(self.channel_manager, ChannelManager)
         )
-        self.mcp_configs = McpConfigRepository()
+        self.mcp_service = McpService(self.chat_service.session_factory)
+        self.skill_service = skill_service or SkillService(self.chat_service.session_factory)
+        self.settings = SettingRepository()
+        if hasattr(self.mcp_manager, "_state_writer"):
+            self.mcp_manager._state_writer = self.mcp_service.persist_runtime_state
         self.channel_service = channel_service or ChannelService(
             self.chat_service.session_factory, self.channel_manager
         )
         self.media_store = MediaStore(self.chat_service.session_factory)
         self._recovery_task: asyncio.Task | None = None
+        self._integration_task: asyncio.Task | None = None
+        self._integration_revision: int | None = None
+        self._skills_revision: int | None = None
         self.channel_start_errors: list[str] = []
         self.started = False
 
@@ -55,28 +63,11 @@ class RuntimeHost:
         if self.started:
             return
         self.channel_start_errors.clear()
-        self.skill_registry.reload()
-        if self.auto_connect_mcp:
-            with self.chat_service.session_factory() as db:
-                configs = [
-                    (
-                        item.name,
-                        item.command,
-                        self.mcp_configs.args(item),
-                        self.mcp_configs.tool_allowlist(item),
-                    )
-                    for item in self.mcp_configs.list_auto_connect(db)
-                ]
-            for name, command, args, allowlist in configs:
-                try:
-                    await self.mcp_manager.connect_with_retry(
-                        name,
-                        command,
-                        args,
-                        tool_allowlist=allowlist,
-                    )
-                except Exception as exc:
-                    logger.warning("MCP server %s failed to connect: %s", name, exc)
+        self.skill_service.register_existing()
+        self.skill_registry.reload(self.skill_service.enabled_overrides())
+        self.skill_service.purge_expired()
+        if self.auto_connect_mcp and hasattr(self.mcp_manager, "reconcile"):
+            await self._reconcile_integrations()
         if self.auto_connect_channels:
             try:
                 await self.channel_service.start_auto_connect()
@@ -86,6 +77,8 @@ class RuntimeHost:
                 logger.warning("Channel auto-connect degraded: %s", message)
         self.chat_service.memory_processor.kick()
         self.started = True
+        if self.auto_connect_mcp:
+            self._integration_task = asyncio.create_task(self._integration_loop())
         if getattr(type(self.channel_manager), "recover_once", None) is not None:
             self._recovery_task = asyncio.create_task(self._recovery_loop())
 
@@ -96,6 +89,10 @@ class RuntimeHost:
             self._recovery_task.cancel()
             await asyncio.gather(self._recovery_task, return_exceptions=True)
             self._recovery_task = None
+        if self._integration_task is not None:
+            self._integration_task.cancel()
+            await asyncio.gather(self._integration_task, return_exceptions=True)
+            self._integration_task = None
         await self.channel_manager.close_all()
         await self.mcp_manager.close_all()
         await self.chat_service.memory_processor.stop()
@@ -126,6 +123,30 @@ class RuntimeHost:
                 raise
             except Exception:
                 logger.exception("Channel recovery sweep failed")
+            await asyncio.sleep(5)
+
+    async def _reconcile_integrations(self) -> None:
+        configs = self.mcp_service.runtime_configs()
+        await self.mcp_manager.reconcile(configs)
+        with self.chat_service.session_factory() as db:
+            self._integration_revision = self.settings.get(db, CONFIG_REVISION_KEY) or 0
+            self._skills_revision = self.settings.get(db, "skills_registry_revision") or 0
+
+    async def _integration_loop(self) -> None:
+        while True:
+            try:
+                with self.chat_service.session_factory() as db:
+                    integration_revision = self.settings.get(db, CONFIG_REVISION_KEY) or 0
+                    skills_revision = self.settings.get(db, "skills_registry_revision") or 0
+                if integration_revision != self._integration_revision:
+                    await self._reconcile_integrations()
+                elif skills_revision != self._skills_revision:
+                    self.skill_registry.reload(self.skill_service.enabled_overrides())
+                    self._skills_revision = skills_revision
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Integration configuration refresh failed")
             await asyncio.sleep(5)
 
     async def __aenter__(self) -> "RuntimeHost":

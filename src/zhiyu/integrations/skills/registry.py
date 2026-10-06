@@ -1,10 +1,13 @@
 """Skill Registry：注册 / 列表 / 匹配（bigram 重叠打分）。"""
 
 from collections.abc import Iterable
+import logging
 from pathlib import Path
 
 from zhiyu.infrastructure.config.settings import settings
 from .loader import Skill, load_skills
+
+logger = logging.getLogger(__name__)
 
 
 def _bigrams(text: str) -> set[str]:
@@ -22,10 +25,17 @@ class SkillRegistry:
         self._skills: dict[str, Skill] = {}
         self.reload()
 
-    def reload(self) -> list[Skill]:
-        self._skills = {}
+    def reload(self, enabled_overrides: dict[str, bool] | None = None) -> list[Skill]:
+        skills: dict[str, Skill] = {}
         for skills_dir in self.skills_dirs:
-            self._skills.update({skill.name: skill for skill in load_skills(skills_dir)})
+            for skill in load_skills(skills_dir):
+                if skill.name in skills:
+                    logger.warning("Ignoring duplicate Skill name %s from %s", skill.name, skill.path)
+                    continue
+                if enabled_overrides and skill.name in enabled_overrides:
+                    skill.enabled = enabled_overrides[skill.name]
+                skills[skill.name] = skill
+        self._skills = skills
         return self.all()
 
     def all(self) -> list[Skill]:

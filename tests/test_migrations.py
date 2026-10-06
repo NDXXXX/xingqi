@@ -53,7 +53,7 @@ def test_upgrade_preserves_legacy_data(tmp_path):
 
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT title FROM conversations WHERE id='c1'")) == "保留我"
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0017_qq_runtime_closure"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0019_installed_skill_trash"
         assert connection.scalar(
             text("SELECT owner_user_id FROM channel_configs WHERE channel='qq'")
         ) is None
@@ -80,6 +80,9 @@ def test_upgrade_preserves_legacy_data(tmp_path):
     }
     assert {"parts_json", "source_event_id"} <= {
         column["name"] for column in inspect(engine).get_columns("messages")
+    }
+    assert "trashed_at" in {
+        column["name"] for column in inspect(engine).get_columns("installed_skills")
     }
     assert {"account_id", "driver"} <= {
         column["name"] for column in inspect(engine).get_columns("channel_configs")

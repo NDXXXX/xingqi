@@ -57,3 +57,32 @@ def test_configure_provider_fallback_order():
     with sessions() as db:
         mapping = SettingRepository().get(db, PROVIDER_FALLBACKS_KEY)
     assert mapping[primary.id] == [backup.id]
+
+
+def test_provider_management_keeps_secrets_private_and_cleans_references():
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine)
+    secrets = FakeSecrets()
+    service = ProviderService(sessions, secrets)
+    primary = service.add(name="Primary", provider_type="deepseek", api_key="private")
+    backup = service.add(name="Backup", provider_type="openai", api_key="backup")
+
+    detail = service.detail("Primary")
+    assert detail["api_key_set"] is True
+    assert "private" not in str(detail)
+    model = service.add_model(
+        "Primary", model_name="custom-chat", supports_vision=True, context_window=8192
+    )
+    service.update_model("Primary", model["id"], max_output_tokens=2048)
+    service.set_fallbacks("Primary", ["Backup"])
+    service.update("Primary", base_url="https://example.test/v1", enabled=False)
+    assert service.detail("Primary")["models"][-1]["max_output_tokens"] == 2048
+    assert service.detail("Primary")["fallbacks"] == ["Backup"]
+
+    service.remove("Backup")
+    assert service.detail("Primary")["fallbacks"] == []
+    service.remove("Primary")
+    assert secrets.values == {}

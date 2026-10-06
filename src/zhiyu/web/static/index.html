@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>知语</title>
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/react/dialogHost.css">
 </head>
 <body>
   <div class="shell">
@@ -15,8 +16,14 @@
       </div>
       <button id="new-chat" class="primary wide">新对话</button>
       <nav class="nav" aria-label="主导航">
-        <button class="nav-item active" data-view="chat">对话</button>
-        <button class="nav-item" data-view="memory">长期记忆</button>
+        <button class="nav-item active" data-view="overview"><span>⌂</span>运行总览</button>
+        <button class="nav-item" data-view="chat"><span>◌</span>对话</button>
+        <button class="nav-item" data-view="providers"><span>◈</span>模型服务</button>
+        <button class="nav-item" data-view="channels"><span>⌁</span>QQ 渠道</button>
+        <button class="nav-item" data-view="mcp"><span>◇</span>MCP 服务</button>
+        <button class="nav-item" data-view="skills"><span>▧</span>Skills</button>
+        <button class="nav-item" data-view="diagnostics"><span>⌘</span>运行诊断</button>
+        <button class="nav-item" data-view="memory"><span>✳</span>长期记忆</button>
       </nav>
       <div class="section-title">最近会话</div>
       <div id="conversations" class="conversation-list"></div>
@@ -27,7 +34,28 @@
     </aside>
 
     <main class="main">
-      <section id="chat-view" class="view active">
+      <section id="overview-view" class="view active">
+        <header class="topbar"><div><small>知语 · 本地 Agent</small><h1>运行总览</h1></div><button class="quiet" data-refresh>刷新状态</button></header>
+        <div class="page-content">
+          <div class="dashboard-top">
+            <div class="dashboard-side">
+              <article class="identity-card panel"><div class="identity-mark">知</div><div><strong>知语</strong><small>Personal Agent</small></div><span id="overview-status" class="status-pill">检查中</span></article>
+              <article class="system-card panel"><div class="panel-heading"><div><span class="eyebrow">SYSTEM</span><h2>系统信息</h2></div></div><div class="system-lines"><div><span>运行状态</span><strong id="system-runtime">检查中</strong></div><div><span>默认模型</span><strong id="system-model">未配置</strong></div><div><span>QQ 主人</span><strong id="system-owner">未设置</strong></div><div><span>运行方式</span><strong>本机 · 单用户</strong></div></div></article>
+            </div>
+            <article class="health-panel panel"><div class="panel-heading"><div><span class="eyebrow">SERVICE HEALTH</span><h2>服务状态</h2></div><button class="text-button" data-goto="diagnostics">打开诊断 →</button></div><div id="service-health-list" class="health-list"></div><div class="health-footnote">状态来自当前知语运行实例；配置或连接变化后可刷新。</div></article>
+          </div>
+          <div class="counter-strip">
+            <article class="counter-card counter-main"><strong id="stat-provider">—</strong><span>模型服务</span></article>
+            <article class="counter-card"><strong id="stat-qq">—</strong><span>QQ 渠道</span></article>
+            <article class="counter-card"><strong id="stat-mcp">—</strong><span>MCP 服务</span></article>
+            <article class="counter-card"><strong id="stat-skills">—</strong><span>可用 Skills</span></article>
+            <article class="counter-card"><strong id="stat-pending">—</strong><span>待处理事件</span></article>
+          </div>
+          <article class="activity-panel panel"><div class="panel-heading"><div><span class="eyebrow">RECENT ACTIVITY</span><h2>最近运行</h2></div><button class="text-button" data-goto="diagnostics">查看全部 →</button></div><div class="activity-layout"><div class="activity-callout"><span class="quote-mark">“</span><p id="activity-summary">知语正在整理运行状态…</p><small>知语 · 本地运行概览</small></div><div id="overview-events" class="simple-list"></div></div></article>
+        </div>
+      </section>
+
+      <section id="chat-view" class="view">
         <header class="topbar">
           <div><small>当前会话</small><h1 id="conversation-title">新的对话</h1></div>
           <div id="model-badge" class="badge">默认模型</div>
@@ -44,6 +72,31 @@
           <textarea id="message-input" rows="1" placeholder="输入消息，Enter 发送，Shift + Enter 换行"></textarea>
           <button id="send" class="send" type="submit" aria-label="发送">↑</button>
         </form>
+      </section>
+
+      <section id="providers-view" class="view">
+        <header class="topbar"><div><small>模型与推理</small><h1>模型服务</h1></div><button class="primary" id="add-provider">添加 Provider</button></header>
+        <div class="page-content"><div class="notice">API Key 会通过本机密钥存储保存；此页面不会再次显示已保存的密钥。</div><div id="providers-list" class="manage-list"></div></div>
+      </section>
+
+      <section id="channels-view" class="view">
+        <header class="topbar"><div><small>OneBot / NapCat</small><h1>QQ 渠道</h1></div><div class="button-row"><button class="quiet" id="qq-stop">停止</button><button class="primary" id="qq-start">启动连接</button></div></header>
+        <div class="page-content"><div id="qq-status-card" class="panel"></div><form id="qq-form" class="panel form-panel"><div class="panel-heading"><div><span class="eyebrow">CONNECTION</span><h2>连接配置</h2></div></div><label>NapCat 反向 WebSocket 地址<input name="endpoint" placeholder="ws://127.0.0.1:6199/ws" required></label><label>主人 QQ 号<input name="owner_user_id" inputmode="numeric" placeholder="仅允许该账号使用 Agent"></label><label>Access Token <input name="token" type="password" autocomplete="new-password" placeholder="留空则保留已保存 Token"></label><p class="form-hint">只在本机打开此管理页面。Token 保存到系统密钥存储，不会回显。</p><button class="primary" type="submit">保存配置</button></form><article class="panel"><div class="panel-heading"><div><span class="eyebrow">GROUP ACCESS</span><h2>群聊白名单</h2></div></div><form id="group-form" class="inline-form"><input name="group_id" placeholder="QQ群号" required><label class="check"><input name="require_mention" type="checkbox" checked> 必须 @ 知语</label><button class="quiet" type="submit">允许此群</button></form><div id="groups-list" class="simple-list"></div></article></div>
+      </section>
+
+      <section id="mcp-view" class="view">
+        <header class="topbar"><div><small>外部工具与上下文</small><h1>MCP 服务</h1></div><button class="primary" id="add-mcp">添加 MCP</button></header>
+        <div class="page-content"><div class="notice">新发现的工具、Resources 与 Prompts 默认不授权。请先检查服务端能力，再逐项开放给 Agent。</div><div id="mcp-list" class="manage-list"></div></div>
+      </section>
+
+      <section id="skills-view" class="view">
+        <header class="topbar"><div><small>本地能力扩展</small><h1>Skills</h1></div><button class="primary" id="install-skill">安装 Skill</button></header>
+        <div class="page-content"><div class="notice">Skill 内容会作为指引按需读取；安装不会执行其中代码或自动安装依赖。</div><div id="skills-list" class="manage-list"></div><article class="panel"><div class="panel-heading"><div><span class="eyebrow">TRASH</span><h2>回收站</h2></div></div><div id="skills-trash" class="simple-list"></div></article></div>
+      </section>
+
+      <section id="diagnostics-view" class="view">
+        <header class="topbar"><div><small>事件、投递与故障</small><h1>运行诊断</h1></div><button class="quiet" data-refresh>刷新记录</button></header>
+        <div class="page-content"><article class="panel"><div class="panel-heading"><div><span class="eyebrow">INBOUND</span><h2>渠道事件</h2></div></div><div id="diagnostic-events" class="table-list"></div></article><article class="panel"><div class="panel-heading"><div><span class="eyebrow">OUTBOUND</span><h2>消息投递</h2></div></div><div id="diagnostic-deliveries" class="table-list"></div></article></div>
       </section>
 
       <section id="memory-view" class="view">
@@ -63,6 +116,7 @@
       </section>
     </main>
   </div>
+  <script type="module" src="/react/dialogHost.js"></script>
   <script type="module" src="/app.js"></script>
 </body>
 </html>

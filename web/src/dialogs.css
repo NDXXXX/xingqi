@@ -1,0 +1,78 @@
+@import "tailwindcss";
+@import "@heroui/styles";
+
+:root {
+  --zh-accent: #df3d78;
+  --zh-panel: #191e29;
+  --zh-muted: #a0a8b7;
+}
+
+.zh-modal {
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(82vh, 760px);
+  overflow: auto;
+  border: 1px solid #ffffff16;
+  border-radius: 22px;
+  color: #eef1f7;
+  background: linear-gradient(145deg, #1d2230, #151922 76%);
+  box-shadow: 0 32px 110px #000b, 0 0 0 1px #df3d7812;
+}
+
+.zh-modal-header {
+  align-items: flex-start;
+  padding: 25px 27px 18px;
+}
+
+.zh-modal-header h2 { margin: 7px 0 0; font-size: 20px; font-weight: 650; }
+.zh-modal-eyebrow { color: #ed5790; font-size: 10px; font-weight: 750; letter-spacing: .18em; }
+.zh-modal-body { display: grid; gap: 18px; padding: 8px 27px 20px; }
+.zh-modal-body p { margin: 0; color: #b5bdcb; line-height: 1.65; white-space: pre-wrap; }
+.zh-modal-input {
+  width: 100%;
+  min-height: 48px;
+  padding: 12px 14px;
+  border: 1px solid #3a4150;
+  border-radius: 12px;
+  outline: 0;
+  color: #f4f5f8;
+  background: #10141c;
+}
+.zh-modal-input:focus { border-color: #dc3e79; box-shadow: 0 0 0 3px #dc3e792b; }
+.zh-form-fields { display: grid; gap: 16px; }
+.zh-form-field { display: grid; gap: 8px; color: #d8dce5; font-size: 13px; }
+.zh-form-label { font-weight: 600; }
+.zh-form-label i { color: #ff709f; font-style: normal; }
+.zh-form-field input:not([type="checkbox"]), .zh-form-field textarea, .zh-form-field select {
+  width: 100%;
+  min-height: 46px;
+  padding: 11px 13px;
+  border: 1px solid #363d4b;
+  border-radius: 11px;
+  outline: 0;
+  color: #f3f4f7;
+  background: #10141c;
+}
+.zh-form-field textarea { resize: vertical; }
+.zh-form-field input:focus, .zh-form-field textarea:focus, .zh-form-field select:focus { border-color: #dc3e79; box-shadow: 0 0 0 3px #dc3e792b; }
+.zh-form-field small { color: var(--zh-muted); font-size: 11px; line-height: 1.5; }
+.zh-form-field.toggle { display: flex; align-items: center; gap: 12px; padding: 13px 14px; border: 1px solid #343b49; border-radius: 12px; background: #111620; }
+.zh-form-field.toggle input { width: 17px; height: 17px; accent-color: var(--zh-accent); }
+.zh-form-field.toggle span { display: grid; gap: 4px; }
+.zh-form-error { color: #ff8f9a !important; }
+.zh-modal-footer { justify-content: flex-end; gap: 10px; padding: 16px 27px 24px; }
+.zh-modal .button--primary, .zh-modal [data-variant="primary"] { background: var(--zh-accent); color: white; }
+.zh-toast {
+  position: fixed;
+  z-index: 100000;
+  right: 26px;
+  bottom: 24px;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 13px 17px;
+  border: 1px solid #ffffff1b;
+  border-radius: 13px;
+  color: #f6f7fa;
+  background: #202634;
+  box-shadow: 0 14px 44px #0008;
+}
+.zh-toast.success { border-color: #348262; }
+.zh-toast.error { border-color: #9f4854; }

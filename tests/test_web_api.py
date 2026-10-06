@@ -10,6 +10,7 @@ from zhiyu.api import create_app
 from zhiyu.application.chat import ChatService
 from zhiyu.application.memories import MemoryService
 from zhiyu.application.runtime import RuntimeHost
+from zhiyu.application.skills import SkillService
 from zhiyu.channels.manager import ChannelManager
 from zhiyu.channels.router import ChannelRouter
 from zhiyu.core.memory.store import MemoryStore
@@ -65,6 +66,7 @@ def make_client(tmp_path):
         chat_service=chat,
         channel_manager=channels,
         mcp_manager=McpManager(),
+        skill_service=SkillService(sessions, tmp_path / "skills"),
         skill_registry=Mock(reload=Mock()),
     )
     return (
@@ -135,3 +137,109 @@ def test_chat_rejects_empty_message(tmp_path):
     with client:
         response = client.post("/api/chat", json={"message": "   "})
     assert response.status_code == 400
+
+
+def test_web_management_can_configure_provider_mcp_and_qq(tmp_path, monkeypatch):
+    client, *_ = make_client(tmp_path)
+    monkeypatch.setenv("WEB_PROVIDER_KEY", "test-key")
+    with client:
+        provider = client.post(
+            "/api/providers",
+            json={"name": "WebProvider", "provider_type": "openai", "api_key_env": "WEB_PROVIDER_KEY"},
+        )
+        assert provider.status_code == 200
+        assert provider.json()["name"] == "WebProvider"
+
+        mcp = client.post(
+            "/api/mcp/servers",
+            json={"name": "web-mcp", "transport": "streamable_http", "url": "https://mcp.example.com/mcp"},
+        )
+        assert mcp.status_code == 200
+        assert mcp.json()["name"] == "web-mcp"
+
+        qq = client.put(
+            "/api/qq/config",
+            json={"endpoint": "ws://127.0.0.1:6199/ws", "owner_user_id": "12345"},
+        )
+        assert qq.status_code == 200
+        assert qq.json()["owner_user_id"] == "12345"
+
+
+def test_web_default_provider_endpoint_matches_chat_fallback(tmp_path):
+    client, _sessions, _store, _provider_id, model_name = make_client(tmp_path)
+    with client:
+        selected = client.get("/api/providers/default")
+    assert selected.status_code == 200
+    assert selected.json() == {"provider": "Fake", "model": model_name}
+
+
+def test_web_provider_model_and_fallback_management(tmp_path, monkeypatch):
+    client, *_ = make_client(tmp_path)
+    monkeypatch.setenv("WEB_PROVIDER_KEY", "not-returned")
+    with client:
+        created = client.post("/api/providers", json={
+            "name": "Backup", "provider_type": "openai", "api_key_env": "WEB_PROVIDER_KEY"
+        })
+        assert created.status_code == 200
+        detail = client.get("/api/providers/Backup").json()
+        assert detail["api_key_env"] == "WEB_PROVIDER_KEY"
+        assert "not-returned" not in json.dumps(detail)
+        model = client.post("/api/providers/Backup/models", json={
+            "model_name": "vision-model", "supports_vision": True, "context_window": 4096
+        })
+        assert model.status_code == 200
+        assert model.json()["supports_vision"] is True
+        updated = client.put(
+            f"/api/providers/Backup/models/{model.json()['id']}",
+            json={"max_output_tokens": 1024},
+        )
+        assert updated.json()["max_output_tokens"] == 1024
+        assert client.put("/api/providers/Fake/fallbacks", json={"providers": ["Backup"]}).status_code == 200
+        assert client.get("/api/providers/Fake").json()["fallbacks"] == ["Backup"]
+
+
+def test_web_admin_rejects_cross_origin_write(tmp_path):
+    client, *_ = make_client(tmp_path)
+    with client:
+        response = client.post(
+            "/api/providers",
+            headers={"Origin": "https://attacker.example"},
+            json={"name": "Blocked", "provider_type": "openai", "api_key_env": "FAKE_KEY"},
+        )
+    assert response.status_code == 403
+
+
+
+
+def test_integration_status_apis_do_not_expose_secret_values(tmp_path):
+    client, *_ = make_client(tmp_path)
+    host = client.app.state.runtime
+
+    class MemorySecrets:
+        def set(self, ref, value):
+            self.value = value
+
+        def get(self, _ref):
+            return self.value
+
+        def delete(self, _ref):
+            self.value = None
+
+    host.mcp_service.secrets = MemorySecrets()
+    host.mcp_service.configure(
+        "docs", None, [], transport="streamable_http", url="https://mcp.example.com/mcp"
+    )
+    host.mcp_service.set_header_secret("docs", "Authorization", "do-not-leak")
+
+    with client:
+        servers = client.get("/api/mcp/servers").json()
+        detail = client.get("/api/mcp/servers/docs").json()
+        skills = client.get("/api/skills").json()
+
+    assert servers[0]["name"] == "docs"
+    assert "do-not-leak" not in json.dumps(servers)
+    assert "secret_refs" not in json.dumps(servers)
+    assert "do-not-leak" not in json.dumps(detail)
+    assert "secret_refs" not in json.dumps(detail)
+    assert detail["secret_names"] == ["header:Authorization"]
+    assert isinstance(skills, list)

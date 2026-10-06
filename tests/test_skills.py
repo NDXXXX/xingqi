@@ -76,3 +76,30 @@ def test_disabled_skill_is_not_matched(tmp_path):
     registry = SkillRegistry(tmp_path)
 
     assert registry.match("帮我分析仓库") == []
+
+
+def test_parse_skill_rejects_duplicate_yaml_keys(tmp_path):
+    skill = _write_skill(
+        tmp_path,
+        "duplicate",
+        "---\nname: duplicate\nname: overwritten\ndescription: bad\n---\nbody",
+    )
+    try:
+        parse_skill(skill / "SKILL.md", "duplicate")
+    except ValueError as exc:
+        assert "重复字段" in str(exc)
+    else:
+        raise AssertionError("重复 YAML 字段应拒绝")
+
+
+def test_validate_package_rejects_symlinks(tmp_path):
+    from zhiyu.integrations.skills.loader import validate_package
+
+    skill = _write_skill(tmp_path, "safe", "---\nname: safe\ndescription: safe\n---\nbody")
+    (skill / "escape").symlink_to(tmp_path / "outside")
+    try:
+        validate_package(skill)
+    except ValueError as exc:
+        assert "符号链接" in str(exc)
+    else:
+        raise AssertionError("符号链接应拒绝")

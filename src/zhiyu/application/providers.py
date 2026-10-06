@@ -13,6 +13,7 @@ from zhiyu.infrastructure.config.keystore import KeyStore, keystore
 from zhiyu.infrastructure.database.db import SessionLocal
 from zhiyu.infrastructure.database.repositories.provider_repository import ProviderRepository
 from zhiyu.infrastructure.database.repositories.setting_repository import SettingRepository
+from zhiyu.infrastructure.database.models import ModelConfig
 
 
 PROVIDER_FALLBACKS_KEY = "provider_fallbacks"
@@ -53,6 +54,160 @@ class ProviderService:
                 )
                 for item in self.providers.list(db)
             ]
+
+    def detail(self, name: str) -> dict:
+        with self.session_factory() as db:
+            provider = self.providers.get_by_name(db, name)
+            if provider is None:
+                raise ValueError("Provider 不存在")
+            fallback_ids = (self.settings.get(db, PROVIDER_FALLBACKS_KEY) or {}).get(provider.id, [])
+            by_id = {item.id: item for item in self.providers.list(db)}
+            return {
+                "id": provider.id,
+                "name": provider.name,
+                "provider_type": provider.provider_type,
+                "enabled": provider.enabled,
+                "configured": provider.configured,
+                "base_url": provider.base_url,
+                "api_key_set": bool(provider.api_key_ref),
+                "api_key_env": provider.api_key_ref[4:] if (provider.api_key_ref or "").startswith("env:") else None,
+                "models": [self._model_dict(model) for model in provider.models],
+                "fallbacks": [by_id[item].name for item in fallback_ids if item in by_id],
+            }
+
+    @staticmethod
+    def _model_dict(model: ModelConfig) -> dict:
+        return {
+            "id": model.id, "model_name": model.model_name, "display_name": model.display_name,
+            "enabled": model.enabled, "supports_tools": model.supports_tools,
+            "supports_streaming": model.supports_streaming, "supports_vision": model.supports_vision,
+            "context_window": model.context_window, "max_output_tokens": model.max_output_tokens,
+        }
+
+    def update(self, name: str, *, base_url: str | None, enabled: bool,
+               api_key: str | None = None, api_key_env: str | None = None,
+               clear_api_key: bool = False) -> None:
+        if sum(bool(value) for value in (api_key, api_key_env, clear_api_key)) > 1:
+            raise ValueError("不能同时替换和清除 API Key")
+        if api_key_env and not os.getenv(api_key_env):
+            raise ValueError(f"环境变量 {api_key_env} 未设置")
+        with self.session_factory() as db:
+            provider = self.providers.get_by_name(db, name)
+            if provider is None:
+                raise ValueError("Provider 不存在")
+            old_ref = provider.api_key_ref
+            new_ref = None
+            if api_key:
+                new_ref = str(uuid4())
+                self.secrets.set(new_ref, api_key)
+            elif clear_api_key:
+                old_ref = provider.api_key_ref if not (provider.api_key_ref or "").startswith("env:") else None
+                provider.api_key_ref = None
+            try:
+                provider.base_url = base_url
+                provider.enabled = enabled
+                if new_ref:
+                    provider.api_key_ref = new_ref
+                elif api_key_env:
+                    provider.api_key_ref = f"env:{api_key_env}"
+                db.commit()
+            except Exception:
+                db.rollback()
+                if new_ref:
+                    self.secrets.delete(new_ref)
+                raise
+            if (new_ref or api_key_env) and old_ref and not old_ref.startswith("env:"):
+                self.secrets.delete(old_ref)
+            if clear_api_key and old_ref:
+                self.secrets.delete(old_ref)
+
+    def remove(self, name: str) -> None:
+        with self.session_factory() as db:
+            provider = self.providers.get_by_name(db, name)
+            if provider is None:
+                raise ValueError("Provider 不存在")
+            fallback_key = self.settings.get(db, PROVIDER_FALLBACKS_KEY) or {}
+            fallback_key.pop(provider.id, None)
+            for key, values in list(fallback_key.items()):
+                fallback_key[key] = [value for value in values if value != provider.id]
+            self.settings.set(db, PROVIDER_FALLBACKS_KEY, fallback_key)
+            default = self.settings.get(db, DEFAULT_MODEL_KEY) or {}
+            if default.get("provider_id") == provider.id:
+                self.settings.delete(db, DEFAULT_MODEL_KEY)
+            secret_ref = provider.api_key_ref
+            self.providers.delete(db, provider)
+        if secret_ref and not secret_ref.startswith("env:"):
+            self.secrets.delete(secret_ref)
+
+    def add_model(self, provider_name: str, **values) -> dict:
+        model_name = (values.get("model_name") or "").strip()
+        if not model_name:
+            raise ValueError("模型标识不能为空")
+        with self.session_factory() as db:
+            provider = self.providers.get_by_name(db, provider_name)
+            if provider is None:
+                raise ValueError("Provider 不存在")
+            if any(item.model_name == model_name for item in provider.models):
+                raise ValueError("模型标识已存在")
+            values["model_name"] = model_name
+            values["display_name"] = values.get("display_name") or model_name
+            for key in ("context_window", "max_output_tokens"):
+                if values.get(key) is not None and values[key] <= 0:
+                    raise ValueError(f"{key} 必须大于 0")
+            return self._model_dict(self.providers.create_model(db, provider, **values))
+
+    def update_model(self, provider_name: str, model_id: str, **values) -> dict:
+        with self.session_factory() as db:
+            provider = self.providers.get_by_name(db, provider_name)
+            model = self.providers.get_model(db, provider.id, model_id) if provider else None
+            if model is None:
+                raise ValueError("模型不存在")
+            if "model_name" in values:
+                values["model_name"] = values["model_name"].strip()
+                if not values["model_name"]:
+                    raise ValueError("模型标识不能为空")
+                if any(item.id != model.id and item.model_name == values["model_name"] for item in provider.models):
+                    raise ValueError("模型标识已存在")
+            for key in ("context_window", "max_output_tokens"):
+                if values.get(key) is not None and values[key] <= 0:
+                    raise ValueError(f"{key} 必须大于 0")
+            if values.get("display_name") is None:
+                values.pop("display_name", None)
+            return self._model_dict(self.providers.update_model(db, model, **values))
+
+    def remove_model(self, provider_name: str, model_id: str) -> None:
+        with self.session_factory() as db:
+            provider = self.providers.get_by_name(db, provider_name)
+            model = self.providers.get_model(db, provider.id, model_id) if provider else None
+            if model is None:
+                raise ValueError("模型不存在")
+            default = self.settings.get(db, DEFAULT_MODEL_KEY) or {}
+            if default.get("model_id") == model.id:
+                self.settings.delete(db, DEFAULT_MODEL_KEY)
+            self.providers.delete_model(db, model)
+
+    def fallbacks(self, provider_name: str) -> list[str]:
+        return self.detail(provider_name)["fallbacks"]
+
+    def default_model(self) -> dict | None:
+        """Return the global default selected by the same fallback order as chat."""
+        with self.session_factory() as db:
+            available = [
+                item for item in self.providers.list(db)
+                if item.enabled and item.configured and any(model.enabled for model in item.models)
+            ]
+            if not available:
+                return None
+            configured = self.settings.get(db, DEFAULT_MODEL_KEY) or {}
+            provider = next(
+                (item for item in available if item.id == configured.get("provider_id")),
+                available[0],
+            )
+            model = next(
+                (item for item in provider.models if item.enabled and item.id == configured.get("model_id")),
+                next(item for item in provider.models if item.enabled),
+            )
+            return {"provider": provider.name, "model": model.model_name}
 
     def add(
         self,
@@ -100,8 +255,8 @@ class ProviderService:
     def set_default(self, provider_name: str, model_name: str) -> None:
         with self.session_factory() as db:
             provider = self.providers.get_by_name(db, provider_name)
-            if provider is None or not provider.enabled:
-                raise ValueError("Provider 不存在或未启用")
+            if provider is None or not provider.enabled or not provider.configured:
+                raise ValueError("Provider 不存在、未启用或未配置")
             model = next(
                 (item for item in provider.models if item.enabled and item.model_name == model_name),
                 None,
@@ -130,8 +285,8 @@ class ProviderService:
     def set_fallbacks(self, provider_name: str, fallback_names: list[str]) -> None:
         with self.session_factory() as db:
             provider = self.providers.get_by_name(db, provider_name)
-            if provider is None or not provider.enabled:
-                raise ValueError("主 Provider 不存在或未启用")
+            if provider is None or not provider.enabled or not provider.configured:
+                raise ValueError("主 Provider 不存在、未启用或未配置")
             fallback_ids: list[str] = []
             for name in fallback_names:
                 fallback = self.providers.get_by_name(db, name)
