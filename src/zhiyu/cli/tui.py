@@ -7,6 +7,7 @@ from textual import on, work
 
 from zhiyu.application.characters import CharacterService
 from zhiyu.application.chat import ChatRequest, ChatService
+from zhiyu.application.conversations import ConversationService
 from zhiyu.application.memories import MemoryService
 from zhiyu.core.recall import format_welcome
 
@@ -53,6 +54,7 @@ class ChatApp(App):
         self._provider_id = provider_id
         self._model = model
         self._service = service or ChatService()
+        self._conversations = ConversationService(getattr(self._service, "session_factory", None))
         self._characters = characters or CharacterService()
         self._memories = memories or MemoryService()
         self._verbose = "off"
@@ -182,13 +184,9 @@ class ChatApp(App):
     def _history_text(self) -> str:
         if self._conversation_id is None:
             return "当前还没有会话"
-        from zhiyu.infrastructure.database.db import SessionLocal
-        from zhiyu.infrastructure.database.repositories.message_repository import MessageRepository
-
-        with SessionLocal() as db:
-            messages = MessageRepository().list_by_conversation(db, self._conversation_id)
+        messages = self._conversations.history(self._conversation_id) or []
         return "\n".join(
-            f"{'你' if m.role == 'user' else '知语'}> {m.content}" for m in messages[-20:]
+            f"{'你' if m['role'] == 'user' else '知语'}> {m['content']}" for m in messages[-20:]
         )
 
     def _character_text(self) -> str:

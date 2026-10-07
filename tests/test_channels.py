@@ -3,10 +3,12 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
+from unittest.mock import AsyncMock
 
 from zhiyu.application.channels import ChannelService
 from zhiyu.application.inbound import ChannelReliabilityService
 from zhiyu.channels.base import IncomingMessage
+from zhiyu.channels.manager import ChannelManager
 from zhiyu.channels.messages import (
     AudioPart,
     FilePart,
@@ -122,6 +124,39 @@ def test_configure_qq_can_clear_existing_token():
         assert config.secret_ref is None
         assert config.owner_user_id == "123"
     assert secrets.deleted == [old_ref]
+
+
+async def test_started_qq_uses_application_group_policy(unused_tcp_port):
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine)
+    manager = ChannelManager(AsyncMock(), sessions)
+    service = ChannelService(sessions, manager)
+    service.configure_qq(
+        f"ws://127.0.0.1:{unused_tcp_port}/ws", owner_user_id="123"
+    )
+    config_id = service.configured_qq()["id"]
+    service.set_group_policy("456", enabled=True, require_mention=True, tool_allowlist=["datetime"])
+
+    await service.start_qq()
+    try:
+        adapter = manager._adapters[config_id]
+        event = InboundEvent(
+            channel="qq", account_id="qq-onebot-default", channel_config_id=config_id,
+            conversation_id="456", conversation_type="group", sender_id="123",
+            mentioned_agent=True, parts=[TextPart(text="你好")],
+        )
+        assert adapter._is_allowed(event) is True
+        assert event.allowed_tools == ["datetime"]
+        event.mentioned_agent = False
+        assert adapter._is_allowed(event) is False
+        event.sender_id = "other"
+        event.mentioned_agent = True
+        assert adapter._is_allowed(event) is False
+    finally:
+        await service.stop()
 
 
 def test_failed_delivery_can_be_queued_and_unknown_requires_confirmation():

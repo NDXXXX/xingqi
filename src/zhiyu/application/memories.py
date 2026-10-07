@@ -5,8 +5,10 @@ from __future__ import annotations
 from zhiyu.application.memory_lifecycle import MemoryLifecycleService
 from zhiyu.application.memory_queries import MemoryQueryService
 from zhiyu.application.memory_shared import MemorySummary
+from zhiyu.core.memory.indexer import rebuild_index
 from zhiyu.core.memory.store import MemoryStore
 from zhiyu.infrastructure.database.db import SessionLocal
+from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository
 
 
 class MemoryService:
@@ -18,6 +20,8 @@ class MemoryService:
         store: MemoryStore | None = None,
     ) -> None:
         shared_store = store or MemoryStore()
+        self.session_factory = session_factory
+        self.store = shared_store
         self._queries = MemoryQueryService(session_factory, shared_store)
         self._lifecycle = MemoryLifecycleService(session_factory, shared_store)
 
@@ -73,3 +77,16 @@ class MemoryService:
 
     def forget_conversation(self, conversation_id: str) -> int:
         return self._lifecycle.forget_conversation(conversation_id)
+
+    def rebuild_index(self) -> dict:
+        with self.session_factory() as db:
+            return rebuild_index(db, self.store)
+
+    def export_files(self) -> list[tuple[str, str]]:
+        with self.session_factory() as db:
+            identity_id = IdentityRepository().local(db).id
+        return [
+            (path.name, path.read_text(encoding="utf-8"))
+            for path in self.store.list_memory_files(identity_id)
+            if path.exists()
+        ]

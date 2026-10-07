@@ -2,6 +2,7 @@ import json
 from unittest.mock import Mock
 
 from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -70,7 +71,11 @@ def make_client(tmp_path):
         skill_registry=Mock(reload=Mock()),
     )
     return (
-        TestClient(create_app(host)),
+        TestClient(
+            create_app(host),
+            base_url="http://127.0.0.1",
+            headers={"X-Zhiyu-Request": "1"},
+        ),
         sessions,
         memory_manager.store,
         provider_id,
@@ -211,6 +216,51 @@ def test_web_admin_rejects_cross_origin_write(tmp_path):
             headers={"Origin": "https://attacker.example"},
             json={"name": "Blocked", "provider_type": "openai", "api_key_env": "FAKE_KEY"},
         )
+    assert response.status_code == 403
+
+
+def test_web_boundary_covers_memory_chat_and_reads(tmp_path):
+    client, *_ = make_client(tmp_path)
+    with client:
+        assert client.post(
+            "/api/memories/missing/confirm",
+            headers={"Origin": "https://attacker.example"},
+        ).status_code == 403
+        assert client.post(
+            "/api/chat",
+            headers={"Origin": "https://attacker.example"},
+            json={"message": "hello"},
+        ).status_code == 403
+        assert client.post(
+            "/api/runs/missing/cancel",
+            headers={"Origin": "https://attacker.example"},
+        ).status_code == 403
+        assert client.get(
+            "/api/memories", headers={"Host": "attacker.example"}
+        ).status_code == 403
+        assert client.get(
+            "/api/conversations", headers={"Host": "attacker.example"}
+        ).status_code == 403
+        assert client.post(
+            "/api/memories/missing/confirm",
+            headers={"X-Zhiyu-Request": ""},
+        ).status_code == 403
+        assert client.post(
+            "/api/memories/missing/confirm",
+            headers={"Origin": "null"},
+        ).status_code == 403
+        assert client.post(
+            "/api/memories/missing/confirm",
+            headers={"Origin": "http://127.0.0.1:9999"},
+        ).status_code == 403
+        assert client.get("/").status_code == 200
+
+
+async def test_web_boundary_rejects_non_loopback_peer(tmp_path):
+    client, *_ = make_client(tmp_path)
+    transport = ASGITransport(app=client.app, client=("192.0.2.1", 12345))
+    async with AsyncClient(transport=transport, base_url="http://127.0.0.1") as remote:
+        response = await remote.get("/api/memories")
     assert response.status_code == 403
 
 

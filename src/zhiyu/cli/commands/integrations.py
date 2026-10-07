@@ -6,39 +6,30 @@ import json
 import sys
 
 from zhiyu.application.mcp import McpService
+from zhiyu.application.providers import ProviderService
 from zhiyu.application.skills import SkillService
-from zhiyu.infrastructure.database.db import SessionLocal
 
 def _embedding(args) -> None:
-    from zhiyu.core.providers.embedding import load_config, resolve_api_key, save_config
-    from zhiyu.infrastructure.config.keystore import keystore
-
+    service = ProviderService()
     if args.embedding_command == "status":
-        with SessionLocal() as db:
-            config = load_config(db)
-        if config is None:
+        status = service.embedding_status()
+        if status is None:
             print("embedding 未配置")
         else:
-            key = "已配置" if resolve_api_key(config.api_key_ref) else "未配置（key 无效）"
-            print(f"base_url={config.base_url} model={config.model} api_key={key}")
+            key = "已配置" if status["api_key_set"] else "未配置（key 无效）"
+            print(f"base_url={status['base_url']} model={status['model']} api_key={key}")
     elif args.embedding_command == "configure":
-        if args.api_key_env:
-            api_key_ref = f"env:{args.api_key_env}"
-        else:
+        api_key = None
+        if not args.api_key_env:
             if not sys.stdin.isatty():
                 raise ValueError("非交互环境请使用 --api-key-env")
             api_key = getpass("API Key: ").strip()
             if not api_key:
                 raise ValueError("API Key 不能为空")
-            keystore.set("embedding", api_key)
-            api_key_ref = "embedding"
-        with SessionLocal() as db:
-            save_config(
-                db,
-                base_url=args.base_url.rstrip("/"),
-                model=args.model,
-                api_key_ref=api_key_ref,
-            )
+        service.configure_embedding(
+            base_url=args.base_url, model=args.model,
+            api_key=api_key, api_key_env=args.api_key_env,
+        )
         print("embedding 已配置")
 
 def _mcp(args) -> None:

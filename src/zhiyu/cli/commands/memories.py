@@ -6,8 +6,6 @@ import json
 from zhiyu.application.consolidation_jobs import ConsolidationProcessor
 from zhiyu.application.memories import MemoryService
 from zhiyu.application.memory_jobs import MemoryJobProcessor
-from zhiyu.infrastructure.database.db import SessionLocal
-from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository
 
 def _print_memories(items) -> None:
     if not items:
@@ -74,23 +72,12 @@ def _memory(args) -> None:
         else:
             raise ValueError("需要指定记忆 ID 或 --conversation")
     elif args.memory_command == "index":
-        from zhiyu.core.memory.indexer import rebuild_index
-        from zhiyu.core.memory.store import MemoryStore
-
-        store = MemoryStore()
-        with SessionLocal() as db:
-            stats = rebuild_index(db, store)
+        stats = service.rebuild_index()
         print(" ".join(f"{key}={value}" for key, value in sorted(stats.items())))
     elif args.memory_command == "export":
-        from zhiyu.core.memory.store import MemoryStore
-
-        store = MemoryStore()
-        with SessionLocal() as db:
-            identity_id = IdentityRepository().local(db).id
-        for path in store.list_memory_files(identity_id):
-            if path.exists():
-                print(f"# {path.name}")
-                print(path.read_text(encoding="utf-8"))
+        for name, content in service.export_files():
+            print(f"# {name}")
+            print(content)
     elif args.memory_command == "consolidate":
         result = asyncio.run(
             ConsolidationProcessor().run_sweep(dry_run=not args.apply, force=args.force)

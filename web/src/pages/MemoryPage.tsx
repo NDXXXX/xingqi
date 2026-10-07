@@ -90,7 +90,7 @@ export function MemoryPage({ reloadKey }: { reloadKey: number }) {
       return;
     const response = await fetch(
       `/api/memories/${encodeURIComponent(item.id)}`,
-      { method: "DELETE" },
+      { method: "DELETE", headers: { "X-Zhiyu-Request": "1" } },
     );
     if (!response.ok) throw new Error(`删除失败：${response.status}`);
     await refreshMemories();

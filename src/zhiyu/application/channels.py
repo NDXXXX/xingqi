@@ -4,6 +4,7 @@ import os
 from uuid import uuid4
 
 from zhiyu.channels.manager import ChannelManager, default_manager
+from zhiyu.channels.messages import InboundEvent
 from zhiyu.infrastructure.config.keystore import KeyStore, keystore
 from zhiyu.infrastructure.database.db import SessionLocal
 from zhiyu.infrastructure.database.repositories.integration_repository import ChannelConfigRepository
@@ -106,6 +107,7 @@ class ChannelService:
             group_require_mention,
             channel_config_id=channel_config_id,
             account_id=account_id,
+            group_policy=self.allow_group_event,
         )
         return endpoint
 
@@ -185,6 +187,19 @@ class ChannelService:
                 self._policy_dict(item)
                 for item in self.group_policies.list(db, config.id)
             ]
+
+    def allow_group_event(self, event: InboundEvent) -> bool:
+        if not event.channel_config_id:
+            return False
+        with self.session_factory() as db:
+            policy = self.group_policies.get(
+                db, event.channel_config_id, event.conversation_id
+            )
+            if policy is None or not policy.enabled:
+                return False
+            event.allowed_tools = self.group_policies.tool_allowlist(policy)
+            event.system_prompt = policy.system_prompt
+            return not policy.require_mention or event.mentioned_agent
 
     def list_events(self, limit: int = 50) -> list[dict]:
         from sqlalchemy import select

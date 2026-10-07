@@ -77,7 +77,7 @@ export function useChatSession({
       try {
         const response = await fetch("/api/chat", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "X-Zhiyu-Request": "1" },
           body: JSON.stringify({ message: text, conversation_id: requestId }),
           signal: controller.signal,
         });

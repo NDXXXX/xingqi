@@ -42,6 +42,35 @@ def test_add_list_and_set_default_provider():
     assert default["provider_id"] == created.id
 
 
+def test_embedding_configuration_uses_secret_reference(monkeypatch):
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine)
+    secrets = FakeSecrets()
+    service = ProviderService(sessions, secrets)
+
+    service.configure_embedding(
+        base_url="https://embed.example/", model="embed-1", api_key="private-key"
+    )
+    assert service.embedding_status() == {
+        "base_url": "https://embed.example", "model": "embed-1", "api_key_set": True
+    }
+    with sessions() as db:
+        stored = SettingRepository().get(db, "embedding")
+    assert stored["api_key_ref"] == "embedding"
+    assert "private-key" not in str(stored)
+
+    monkeypatch.setenv("EMBED_TEST_KEY", "from-env")
+    service.configure_embedding(
+        base_url="https://embed.example", model="embed-2", api_key_env="EMBED_TEST_KEY"
+    )
+    assert service.embedding_status()["api_key_set"] is True
+    with sessions() as db:
+        assert SettingRepository().get(db, "embedding")["api_key_ref"] == "env:EMBED_TEST_KEY"
+
+
 def test_configure_provider_fallback_order():
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool

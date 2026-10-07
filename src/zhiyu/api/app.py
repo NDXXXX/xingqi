@@ -48,33 +48,49 @@ def create_app(host: RuntimeHost | None = None) -> FastAPI:
     app.include_router(build_memories_router(memories))
 
     @app.middleware("http")
-    async def local_admin_only(request: Request, call_next):
-        admin_prefixes = (
-            "/api/providers", "/api/mcp/servers", "/api/skills",
-            "/api/qq/", "/api/channel-events/", "/api/channel-deliveries/",
-        )
-        if request.url.path.startswith(admin_prefixes) and request.method not in {"GET", "HEAD", "OPTIONS"}:
-            host = request.client.host if request.client else ""
+    async def local_api_only(request: Request, call_next):
+        if request.url.path == "/api" or request.url.path.startswith("/api/"):
+            peer = request.client.host if request.client else ""
             try:
-                is_local = ipaddress.ip_address(host).is_loopback
+                local_peer = ipaddress.ip_address(peer).is_loopback
             except ValueError:
-                is_local = host in {"localhost", "testclient"}
-            if not is_local:
-                return JSONResponse(status_code=403, content={"detail": "管理操作仅允许本机访问"})
-            host_header = urlsplit(f"//{request.headers.get('host', '')}").hostname or ""
-            host_header = host_header.lower()
+                local_peer = peer == "testclient"
+            if not local_peer:
+                return JSONResponse(status_code=403, content={"detail": "API 仅允许本机访问"})
+
             try:
-                valid_host = host_header in {"localhost", "testserver"} or ipaddress.ip_address(host_header).is_loopback
+                host_header = urlsplit(f"//{request.headers.get('host', '')}")
+                host = (host_header.hostname or "").lower()
+                host_port = host_header.port
+                local_host = host == "localhost" or ipaddress.ip_address(host).is_loopback
             except ValueError:
-                valid_host = False
-            if not valid_host:
-                return JSONResponse(status_code=403, content={"detail": "管理操作 Host 无效"})
-            origin = request.headers.get("origin") or request.headers.get("referer")
-            if origin:
-                parsed = urlsplit(origin)
-                request_host = request.headers.get("host", "").lower()
-                if parsed.netloc.lower() != request_host or parsed.scheme not in {"http", "https"}:
-                    return JSONResponse(status_code=403, content={"detail": "管理操作来源与页面不一致"})
+                return JSONResponse(status_code=403, content={"detail": "API Host 无效"})
+            if (
+                not local_host or host_header.username or host_header.password
+                or host_header.path or host_header.query or host_header.fragment
+            ):
+                return JSONResponse(status_code=403, content={"detail": "API Host 无效"})
+
+            if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+                origin = request.headers.get("origin")
+                referer = request.headers.get("referer")
+                if origin is not None or referer is not None:
+                    try:
+                        source = urlsplit(origin if origin is not None else referer)
+                        source_port = source.port
+                        default_port = 443 if request.url.scheme == "https" else 80
+                        same_origin = (
+                            source.scheme == request.url.scheme
+                            and (source.hostname or "").lower() == host
+                            and (source_port or default_port) == (host_port or default_port)
+                            and not source.username and not source.password
+                        )
+                    except ValueError:
+                        same_origin = False
+                    if not same_origin:
+                        return JSONResponse(status_code=403, content={"detail": "API 来源与页面不一致"})
+                if request.headers.get("X-Zhiyu-Request") != "1":
+                    return JSONResponse(status_code=403, content={"detail": "缺少本机请求标记"})
         return await call_next(request)
 
     @app.get("/api/health")

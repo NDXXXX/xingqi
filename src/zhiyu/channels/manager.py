@@ -1,11 +1,13 @@
 """Channel Manager：管理渠道适配器的连接状态。"""
 
 from datetime import datetime, timezone
+from collections.abc import Callable
 
 from zhiyu.application.inbound import ChannelReliabilityService
 from zhiyu.infrastructure.database.db import SessionLocal
 
 from .base import ChannelAdapter
+from .messages import InboundEvent
 from .qq.adapter import QQAdapter
 from .router import ChannelRouter
 
@@ -63,6 +65,7 @@ class ChannelManager:
         *,
         channel_config_id: str | None = None,
         account_id: str = "qq-onebot-default",
+        group_policy: Callable[[InboundEvent], bool] | None = None,
     ) -> None:
         if channel != "qq":
             raise ValueError(f"未知渠道: {channel}")
@@ -95,6 +98,7 @@ class ChannelManager:
             channel_config_id=channel_config_id,
             account_id=account_id,
             reliability=self.reliability,
+            group_policy=group_policy,
         )
         await self.disconnect(key)
         await adapter.start()

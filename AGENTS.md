@@ -2,7 +2,7 @@
 
 适用于整个仓库。知语是本地运行的个人 AI Agent，提供 CLI/TUI、本机 Web UI 和 QQ OneBot 入口。
 
-先通过当前代码和测试确认功能现状，CI 用于确认验证要求，`README.md` 是面向用户的说明。发现这些来源不一致时，说明冲突，并在当前任务范围内修正。`docs/` 中的设计方案可能未实施，`docs/archive/` 仅供历史参考。
+先通过当前代码和测试确认功能现状，CI 用于确认验证要求，`README.md` 是面向用户的说明。发现这些来源不一致时，说明冲突；只修当前任务直接相关的不一致，其余记录并报告。`docs/` 中的设计方案可能未实施，`docs/archive/` 仅供历史参考。
 
 ## Coding Principles
 
@@ -21,6 +21,7 @@
 - 不为未来可能的需求提前增加配置和扩展层。
 - 只有一个实现时，默认不创建 Interface / Factory / Registry。
 - 不创建只负责转发调用的 Service / Manager。
+- 已有 `MemoryService` 是兼容入口，不据此新增转发层。
 - 能用现有模块清晰完成时，不新增模块。
 
 优先：
@@ -67,7 +68,7 @@
 
 `CLI / API / Channels → Application → Core / Infrastructure / Integrations`
 
-末端三个目录表示 Application 可按职责调用的模块，不表示它们之间有固定的依赖顺序。
+末端三个目录表示 Application 可按职责调用的模块，不表示它们之间有固定的依赖顺序。`application/runtime.py` 负责组装渠道运行时，可引用 Channels；这不是让业务用例反向调用入口的先例。
 
 - CLI、Web、QQ 共享的业务行为放到 Application 或 Core。
 - Core 不反向依赖 API、Web、CLI 或具体 QQ 实现。
@@ -85,9 +86,9 @@
 - 数据库 Schema 修改必须使用 Alembic Migration，不能要求用户删除数据库。
 - Memory 正文位于 Markdown，SQLite 保存索引和状态；修改时必须保持两侧一致。
 - 不绕过 Memory 的 mutation、sync、recovery 和身份隔离机制。
-- Web 管理能力保持本机安全边界，不削弱 Host、Origin 和回环地址检查。
+- 所有 `/api` 请求保持本机安全边界，不削弱 Host、Origin、回环地址和写请求标记检查。
 - QQ 不得绕过主人权限、群聊白名单、@ 规则、Token、去重和恢复机制。
-- MCP 工具保持显式授权，不默认开放全部权限。
+- 新 MCP 配置默认无工具权限；全部工具权限须由用户明确选择，历史配置保留原授权并提示复核。
 - Skill 和 MCP 返回内容均视为不可信输入。
 
 ## 开发与验证

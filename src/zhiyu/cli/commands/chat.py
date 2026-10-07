@@ -5,13 +5,11 @@ import sys
 
 from zhiyu.application.characters import CharacterService
 from zhiyu.application.chat import ChatRequest, ChatService
+from zhiyu.application.conversations import ConversationService
 from zhiyu.application.memories import MemoryService
 from zhiyu.cli.commands.memories import _print_memories
-from zhiyu.core.recall import format_welcome, last_local_conversation, list_goals
+from zhiyu.core.recall import format_welcome
 from zhiyu.core.tools.registry import default_registry
-from zhiyu.infrastructure.database.db import SessionLocal
-from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository
-from zhiyu.infrastructure.database.repositories.message_repository import MessageRepository
 
 CYAN = "\033[36m"
 GREEN = "\033[32m"
@@ -120,11 +118,9 @@ def _history(conversation_id: str | None) -> None:
     if conversation_id is None:
         print("当前还没有会话")
         return
-    with SessionLocal() as db:
-        messages = MessageRepository().list_by_conversation(db, conversation_id)
-    for message in messages[-20:]:
-        name = "你" if message.role == "user" else "知语"
-        print(f"{name}> {message.content}")
+    for message in (ConversationService().history(conversation_id) or [])[-20:]:
+        name = "你" if message["role"] == "user" else "知语"
+        print(f"{name}> {message['content']}")
 
 def _set_character(service: CharacterService, conversation_id: str | None, character_id: str) -> None:
     if conversation_id is None:
@@ -143,18 +139,7 @@ def _show_character(service: CharacterService, conversation_id: str | None) -> N
 
 def _entry_state(args) -> tuple[str | None, str | None, list[str]]:
     """解析启动状态：conversation_id、续接标题、进行中事项。"""
-    conversation_id = args.conversation
-    continuing_title = None
-    goals: list[str] = []
-    with SessionLocal() as db:
-        identity_id = IdentityRepository().local(db).id
-        if conversation_id is None:
-            last = last_local_conversation(db, identity_id)
-            if last is not None:
-                conversation_id = last.id
-                continuing_title = last.title
-        goals = list_goals(db, identity_id)
-    return conversation_id, continuing_title, goals
+    return ConversationService().local_entry_state(args.conversation)
 
 def _chat_tui(args) -> None:
     from zhiyu.cli.tui import ChatApp

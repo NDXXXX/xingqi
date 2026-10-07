@@ -7,6 +7,8 @@ import os
 from uuid import uuid4
 
 from zhiyu.core.providers.base import LLMResponse
+from zhiyu.core.providers.embedding import load_config as load_embedding_config
+from zhiyu.core.providers.embedding import save_config as save_embedding_config
 from zhiyu.core.providers.router import PROVIDER_SPECS, ProviderRouter, provider_router
 from zhiyu.core.providers.selection import DEFAULT_MODEL_KEY
 from zhiyu.infrastructure.config.keystore import KeyStore, keystore
@@ -40,6 +42,30 @@ class ProviderService:
         self.router = router
         self.providers = ProviderRepository()
         self.settings = SettingRepository()
+
+    def embedding_status(self) -> dict | None:
+        with self.session_factory() as db:
+            config = load_embedding_config(db)
+        if config is None:
+            return None
+        ref = config.api_key_ref
+        readable = bool(
+            os.getenv(ref.removeprefix("env:")) if ref and ref.startswith("env:")
+            else self.secrets.get(ref) if ref else None
+        )
+        return {"base_url": config.base_url, "model": config.model, "api_key_set": readable}
+
+    def configure_embedding(
+        self, *, base_url: str, model: str, api_key: str | None = None,
+        api_key_env: str | None = None,
+    ) -> None:
+        if bool(api_key) == bool(api_key_env):
+            raise ValueError("必须且只能提供 API Key 或 API Key 环境变量")
+        ref = f"env:{api_key_env}" if api_key_env else "embedding"
+        if api_key:
+            self.secrets.set(ref, api_key)
+        with self.session_factory() as db:
+            save_embedding_config(db, base_url=base_url.rstrip("/"), model=model, api_key_ref=ref)
 
     def list(self) -> list[ProviderSummary]:
         with self.session_factory() as db:

@@ -138,6 +138,23 @@ def test_memory_service_add_routes_core_types_to_files(tmp_path):
     assert [item.tier for item in service.list()] == ["core", "core"]
 
 
+def test_memory_index_and_export_stay_scoped_to_local_identity(tmp_path):
+    factory = _database()
+    store = MemoryStore(tmp_path)
+    service = MemoryService(factory, store=store)
+    service.add(type="fact", content="本机用户的事实")
+    with factory() as db:
+        other = IdentityRepository().get_or_create(db, "qq", "other-user")
+        other_id = other.id
+    store.append(store.core_path_for(other_id), "其他身份的事实", meta={"type": "fact"})
+
+    exported = service.export_files()
+    assert any("本机用户的事实" in content for _, content in exported)
+    assert all("其他身份的事实" not in content for _, content in exported)
+    assert service.rebuild_index()["created"] >= 0
+    assert [item.content for item in service.list()] == ["本机用户的事实"]
+
+
 def test_forget_plan_is_read_only(tmp_path):
     factory = _database()
     service = MemoryService(factory, store=MemoryStore(tmp_path))

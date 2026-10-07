@@ -15,6 +15,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from zhiyu.application.inbound import ChannelReliabilityService
+from zhiyu.application.channels import ChannelService
 from zhiyu.channels.manager import ChannelManager
 from zhiyu.channels.messages import (
     AudioPart,
@@ -120,6 +121,23 @@ async def test_reverse_private_message_and_reconnect(listener):
         await wait_status(states, "listening")
     assert router.handle.await_count == 2
     assert router.handle.call_args.args[0].external_conversation_id == "123"
+
+
+async def test_rejected_account_does_not_block_correct_reconnect(listener):
+    adapter, _, states = listener
+    headers = {"Authorization": "Bearer secret", "X-Self-ID": "123"}
+    async with connect(adapter.ws_url, additional_headers=headers):
+        pass
+    await wait_status(states, "listening")
+
+    async with connect(adapter.ws_url, additional_headers={
+        "Authorization": "Bearer secret", "X-Self-ID": "456",
+    }) as rejected:
+        await rejected.wait_closed()
+        assert rejected.close_code == 1008
+
+    async with connect(adapter.ws_url, additional_headers=headers):
+        await wait_status(states, "connected")
 
 
 @pytest.mark.parametrize("path,token,status", [("/ws", "bad", 401), ("/wrong", "secret", 404)])
@@ -388,6 +406,7 @@ def test_persisted_group_policy_is_required_and_sets_tool_scope():
         owner_user_id="123",
         channel_config_id=config.id,
         reliability=reliability,
+        group_policy=ChannelService(sessions).allow_group_event,
     )
     event = adapter._to_event(group_message())
     assert event is not None

@@ -216,7 +216,7 @@ def _finish_context(
         system_parts.append(
             "可能相关的技能（需要时调用 read_skill 获取完整说明）：\n"
             + "\n".join(
-                f"- {skill.name}: {skill.description or '无描述'}"
+                f"- {skill.name}"
                 for skill in matched
             )
         )

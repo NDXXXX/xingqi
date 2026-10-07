@@ -48,6 +48,7 @@ class QQAdapter(ChannelAdapter):
         allow_group_messages: bool = False,
         group_require_mention: bool = True,
         reliability=None,
+        group_policy: Callable[[InboundEvent], bool] | None = None,
         send_timeout_seconds: float = SEND_TIMEOUT_SECONDS,
         max_concurrency: int = 4,
     ):
@@ -60,6 +61,7 @@ class QQAdapter(ChannelAdapter):
         self.allow_group_messages = allow_group_messages
         self.group_require_mention = group_require_mention
         self.reliability = reliability
+        self.group_policy = group_policy
         self.send_timeout_seconds = send_timeout_seconds
         self.on_status = on_status
         self._ws = None
@@ -127,11 +129,11 @@ class QQAdapter(ChannelAdapter):
         if self._ws is not None:
             await ws.close(code=1008, reason="QQ is already connected")
             return
-        self._ws = ws
         observed_self_id = ws.request.headers.get("X-Self-ID")
         if self._connected_self_id and observed_self_id and observed_self_id != self._connected_self_id:
             await ws.close(code=1008, reason="QQ account changed")
             return
+        self._ws = ws
         if observed_self_id:
             self._connected_self_id = observed_self_id
         self._status("connected")
@@ -354,18 +356,7 @@ class QQAdapter(ChannelAdapter):
         if event.conversation_type == "private":
             return True
         if self.channel_config_id and self.reliability is not None:
-            from zhiyu.infrastructure.database.repositories.channel_repository import (
-                ChannelGroupPolicyRepository,
-            )
-
-            policies = ChannelGroupPolicyRepository()
-            with self.reliability.session_factory() as db:
-                policy = policies.get(db, self.channel_config_id, event.conversation_id)
-                if policy is None or not policy.enabled:
-                    return False
-                event.allowed_tools = policies.tool_allowlist(policy)
-                event.system_prompt = policy.system_prompt
-                return not policy.require_mention or event.mentioned_agent
+            return self.group_policy(event) if self.group_policy else False
         return self.allow_group_messages and (
             not self.group_require_mention or event.mentioned_agent
         )

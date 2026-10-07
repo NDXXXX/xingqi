@@ -12,7 +12,7 @@ export const request = async <T,>(
 
 export const post = (method: string, body?: unknown): RequestInit => ({
   method,
-  headers: { "Content-Type": "application/json" },
+  headers: { "Content-Type": "application/json", "X-Zhiyu-Request": "1" },
   ...(body === undefined ? {} : { body: JSON.stringify(body) }),
 });
 
