@@ -48,8 +48,8 @@ class MemoryService:
         with self.session_factory() as db:
             return get_index_status(db)
 
-    def consolidation_runs(self, limit: int = 5) -> list[dict]:
-        return self._queries.consolidation_runs(limit)
+    def consolidation_runs(self, limit: int = 5, offset: int = 0) -> list[dict]:
+        return self._queries.consolidation_runs(limit, offset)
 
     def add(self, *, type: str, content: str) -> MemorySummary:
         return self._lifecycle.add(type=type, content=content)

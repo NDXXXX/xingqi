@@ -92,7 +92,7 @@ def _mcp(args) -> None:
             elif not args.confirm_command:
                 raise ValueError("启用 stdio MCP 会执行配置命令；非交互环境请使用 --confirm-command")
         service.enable(args.name)
-        print(f"MCP 已启用：{args.name}；运行中的知语将在数秒内连接")
+        print(f"MCP 已启用：{args.name}；运行中的星栖将在数秒内连接")
     elif args.mcp_command == "remove":
         if not args.confirm:
             raise ValueError("删除配置会移除该 Server 的 Keychain 凭据；请追加 --confirm")
@@ -234,4 +234,4 @@ def _skills(args) -> None:
         print(f"Skill 已恢复：{service.restore(args.target)}")
     elif command == "reload":
         service.request_reload()
-        print("已请求刷新 Skills；运行中的知语会在数秒内重载。")
+        print("已请求刷新 Skills；运行中的星栖会在数秒内重载。")

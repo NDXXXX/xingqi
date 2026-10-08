@@ -11,7 +11,7 @@
 
 ```text
 本机 Session A ─┐
-本机 Session B ─┼──> 知语 Agent ──> 同一份个人记忆
+本机 Session B ─┼──> 星栖 Agent ──> 同一份个人记忆
 QQ Session A ───┤
 QQ Session B ───┘
 
@@ -144,4 +144,4 @@ Session 回答“这段对话的上下文是什么”；记忆回答“Agent 从
 
 ## 10. 最终决策
 
-知语按 OpenClaw 单机个人 Agent 的方式工作：**一个 Agent workspace/记忆空间，多个对话 Session。**渠道和 Session 负责消息入口与对话上下文；它们不再生成各自的私人记忆空间。主人校验只负责保护这个个人 Agent 的入口，不扩展成一套身份绑定系统。
+星栖按 OpenClaw 单机个人 Agent 的方式工作：**一个 Agent workspace/记忆空间，多个对话 Session。**渠道和 Session 负责消息入口与对话上下文；它们不再生成各自的私人记忆空间。主人校验只负责保护这个个人 Agent 的入口，不扩展成一套身份绑定系统。

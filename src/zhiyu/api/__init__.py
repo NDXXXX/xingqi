@@ -1,4 +1,4 @@
-"""知语本地 Web API。"""
+"""星栖本地 Web API。"""
 
 from .app import create_app
 

@@ -52,13 +52,13 @@ def test_tool_lines_full_truncates_at_4000():
 def test_color_off_when_not_tty(monkeypatch):
     monkeypatch.setattr(cli, "_tty", lambda: False)
 
-    assert cli._color(cli.GREEN, "知语> ") == "知语> "
+    assert cli._color(cli.GREEN, "星栖> ") == "星栖> "
 
 
 def test_color_on_when_tty(monkeypatch):
     monkeypatch.setattr(cli, "_tty", lambda: True)
 
-    assert cli._color(cli.GREEN, "知语> ") == "\033[32m知语> \033[0m"
+    assert cli._color(cli.GREEN, "星栖> ") == "\033[32m星栖> \033[0m"
 
 
 class _FakeService:
@@ -85,7 +85,7 @@ async def test_send_renders_tool_card_and_second_prefix(capsys):
     )
 
     assert result == "c1"
-    assert capsys.readouterr().out == "知语> \n  ⚙ calculator(123 * 456)\n知语> 结果是 56088\n\n"
+    assert capsys.readouterr().out == "星栖> \n  ⚙ calculator(123 * 456)\n星栖> 结果是 56088\n\n"
 
 
 async def test_send_silent_tools_in_single_shot(capsys):

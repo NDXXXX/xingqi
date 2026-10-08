@@ -79,7 +79,7 @@ async def _send(
 ) -> str:
     next_conversation = conversation_id
     if show_tools:
-        print(_color(GREEN, "知语> "), end="", flush=True)
+        print(_color(GREEN, "星栖> "), end="", flush=True)
     tools_shown = False
     chunk_started = False
     multiline = False
@@ -100,7 +100,7 @@ async def _send(
         elif event["type"] == "chunk":
             if not chunk_started:
                 if show_tools and tools_shown:
-                    print(_color(GREEN, "知语> "), end="", flush=True)
+                    print(_color(GREEN, "星栖> "), end="", flush=True)
                 chunk_started = True
             if "\n" in event["text"]:
                 multiline = True
@@ -119,7 +119,7 @@ def _history(conversation_id: str | None) -> None:
         print("当前还没有会话")
         return
     for message in (ConversationService().history(conversation_id) or [])[-20:]:
-        name = "你" if message["role"] == "user" else "知语"
+        name = "你" if message["role"] == "user" else "星栖"
         print(f"{name}> {message['content']}")
 
 def _set_character(service: CharacterService, conversation_id: str | None, character_id: str) -> None:
@@ -177,7 +177,7 @@ async def _chat_line(args) -> None:
     if welcome:
         print(welcome)
     else:
-        print("知语 CLI。输入 /help 查看命令，/exit 退出。")
+        print("星栖 CLI。输入 /help 查看命令，/exit 退出。")
     first_turn = True
     while True:
         try:

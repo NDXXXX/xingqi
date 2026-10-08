@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "zhiyu-agent"
 version = "0.1.0"
-description = "知语 Personal AI Agent CLI"
+description = "星栖 Personal AI Agent CLI"
 requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.13",

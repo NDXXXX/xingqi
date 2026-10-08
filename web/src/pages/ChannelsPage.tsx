@@ -166,7 +166,7 @@ export function ChannelsPage({ reloadKey, onLoadError, act }: Props) {
           <input name="group" placeholder="QQ群号" required />
           <label className="check">
             <input name="mention" type="checkbox" defaultChecked />
-            必须 @ 知语
+            必须 @ 星栖
           </label>
           <button className="quiet">允许此群</button>
         </form>

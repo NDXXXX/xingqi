@@ -4,7 +4,7 @@ export type Page =
   | "chat"
   | "providers"
   | "channels"
-  | "mcp"
-  | "skills"
+  | "plugins"
   | "diagnostics"
+  | "about"
   | "memory";

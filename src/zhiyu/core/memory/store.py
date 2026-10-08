@@ -1,8 +1,11 @@
 """文件权威的记忆存储：按身份隔离 Markdown，使用稳定 entry id 寻址。
 
 文件布局（``settings.memory_dir`` 下）：
-- ``identities/<identity_id>/USER.md`` 用户模型（profile / preference）
+- ``identities/<identity_id>/AGENTS.md`` 对话规则
+- ``identities/<identity_id>/SOUL.md`` 陪伴人格
+- ``identities/<identity_id>/BOOTSTRAP.md`` 一次性初次认识引导
 - ``identities/<identity_id>/IDENTITY.md`` 助手身份
+- ``identities/<identity_id>/USER.md`` 用户模型（profile / preference）
 - ``identities/<identity_id>/MEMORY.md`` 长期核心
 - ``identities/<identity_id>/daily/YYYY-MM-DD.md`` 情景观察
 - ``identities/<identity_id>/DREAMS.md`` 巩固审查日志
@@ -31,6 +34,29 @@ USER_FILE = "USER.md"
 IDENTITY_FILE = "IDENTITY.md"
 CORE_FILE = "MEMORY.md"
 DREAMS_FILE = "DREAMS.md"
+AGENT_INSTRUCTIONS_FILE = "AGENTS.md"
+PERSONA_FILE = "SOUL.md"
+BOOTSTRAP_FILE = "BOOTSTRAP.md"
+
+_BOOTSTRAP_TEMPLATES = {
+    AGENT_INSTRUCTIONS_FILE: """# 对话规则
+
+- 先回应用户真正表达的内容；用户倾诉时先倾听和共情，再判断是否需要建议。
+- 使用自然、温和、真诚的语气，避免机械复述、过度追问和强行亲密。
+- 结合用户明确提供的资料与记忆；不确定或没有记住时如实说明，不编造共同经历。
+- 用户当前的明确纠正优先于旧记忆；涉及会变化的计划和状态时先确认是否仍有效。
+""",
+    PERSONA_FILE: """# 星栖的陪伴人格
+
+你是用户长期使用的私人 AI 助手，也是可以自然聊天的熟悉伙伴。保持温暖、可靠、有自己的表达，但不假装是真人，也不声称拥有现实经历或感受。可以轻松闲聊，也能在用户需要时认真提供帮助。用户的明确偏好和边界优先于本文件。
+""",
+    BOOTSTRAP_FILE: """# 初次认识
+
+在初次私人对话中，一次只自然地了解一件事：用户希望怎样称呼、希望助手叫什么、喜欢怎样的聊天方式，以及最近最希望获得哪类陪伴或帮助。让用户可以跳过，不连续盘问，也不索取敏感信息。
+
+只把用户明确确认的信息写入相应身份或用户资料；不从玩笑、引用内容或假设中推断。完成初次认识后，由用户在「关于彼此」中标记引导完成。
+""",
+}
 
 # 进入用户模型文件的类型；其余核心类型进入 MEMORY.md。
 _USER_TYPES = ("profile", "preference")
@@ -158,6 +184,42 @@ class MemoryStore:
 
     def dreams_path(self, identity_id: str) -> Path:
         return self.vault_dir(identity_id) / DREAMS_FILE
+
+    def read_bootstrap_files(self, identity_id: str) -> dict[str, str]:
+        """读取并补齐工作区引导文件；已存在的用户编辑内容保持原样。"""
+        vault = self.vault_dir(identity_id)
+        files: dict[str, str] = {}
+        for name, template in _BOOTSTRAP_TEMPLATES.items():
+            path = vault / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with self._lock_for(path):
+                if not path.exists():
+                    self._atomic_write(path, template)
+                files[name] = path.read_text(encoding="utf-8")
+        return files
+
+    def bootstrap_pending(self, identity_id: str) -> bool:
+        vault = self.vault_dir(identity_id)
+        if (vault / ".bootstrap-completed").exists():
+            return False
+        return not any(
+            self.read_entries(vault / name)
+            for name in (IDENTITY_FILE, USER_FILE, CORE_FILE)
+        )
+
+    def complete_bootstrap(self, identity_id: str) -> None:
+        path = self.vault_dir(identity_id) / ".bootstrap-completed"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock_for(path):
+            self._atomic_write(path, "completed\n")
+
+    def write_bootstrap_file(self, identity_id: str, name: str, content: str) -> None:
+        if name not in _BOOTSTRAP_TEMPLATES:
+            raise ValueError("不支持的助手设定文件")
+        path = self.vault_dir(identity_id) / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock_for(path):
+            self._atomic_write(path, content.strip() + "\n")
 
     def daily_path(self, when: datetime | None = None, identity_id: str | None = None) -> Path:
         if when is None:

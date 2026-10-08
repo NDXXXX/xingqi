@@ -18,7 +18,13 @@ from zhiyu.infrastructure.database.repositories.memory_repository import MemoryR
 from zhiyu.core.memory.deep_recall import deep_recall, has_recall_intent
 from zhiyu.core.memory.freshness import needs_confirmation
 from zhiyu.core.memory.retriever import hybrid_rank, hybrid_rank_async, normalize_text
-from zhiyu.core.memory.store import CORE_FILE, IDENTITY_FILE, USER_FILE, MemoryStore
+from zhiyu.core.memory.store import (
+    BOOTSTRAP_FILE,
+    CORE_FILE,
+    IDENTITY_FILE,
+    USER_FILE,
+    MemoryStore,
+)
 from zhiyu.integrations.mcp.manager import default_manager as mcp_manager
 from zhiyu.integrations.skills.registry import default_registry as skill_registry
 from zhiyu.core.tools.registry import ToolRegistry, default_registry
@@ -157,6 +163,23 @@ def _base_system_parts(
     parts: list[str] = []
     if recall:
         parts.append("上次会话与进行中事项（用于衔接上下文，不要逐字复述）：\n" + recall)
+    store = memory_store or MemoryStore()
+    bootstrap_files = (
+        store.read_bootstrap_files(conversation.identity_id)
+        if conversation.identity_id and _private_memory_allowed(conversation)
+        else {}
+    )
+    instructions = bootstrap_files.get("AGENTS.md", "").strip()
+    if instructions:
+        parts.append("用户工作区中的助手行为规则：\n" + instructions)
+    if (
+        conversation.identity_id
+        and _private_memory_allowed(conversation)
+        and store.bootstrap_pending(conversation.identity_id)
+    ):
+        onboarding = bootstrap_files.get(BOOTSTRAP_FILE, "").strip()
+        if onboarding:
+            parts.append("首次认识引导（完成后不再注入）：\n" + onboarding)
     character = (
         character_repo.get(db, conversation.character_id)
         if conversation.character_id
@@ -166,13 +189,16 @@ def _base_system_parts(
         parts.append(build_system_prompt(character))
     else:
         name = (
-            (memory_store or MemoryStore()).assistant_name(conversation.identity_id)
+            store.assistant_name(conversation.identity_id)
             if conversation.identity_id else None
-        ) or "知语"
+        ) or "星栖"
         parts.append(
             f"你的名字是“{name}”，是一名本地个人 AI 助手。"
             "用户当前明确改名时以新名字为准。"
         )
+        persona = bootstrap_files.get("SOUL.md", "").strip()
+        if persona:
+            parts.append("助手人格设定：\n" + persona)
     return parts
 
 
@@ -421,7 +447,7 @@ def _conversation_rounds(messages: list[dict]) -> list[list[dict]]:
 def _render_history_summary(messages: list[dict], budget: int) -> str:
     if not messages or budget <= 0:
         return ""
-    labels = {"user": "用户", "assistant": "知语", "tool": "工具"}
+    labels = {"user": "用户", "assistant": "星栖", "tool": "工具"}
     lines: list[str] = []
     used = 0
     for message in reversed(messages):

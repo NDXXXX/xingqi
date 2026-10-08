@@ -10,6 +10,7 @@ import { errorText, request } from "./api";
 import { StateCard } from "./components/StateCard";
 import { ChatPage } from "./pages/ChatPage";
 import { MemoryPage } from "./pages/MemoryPage";
+import { AboutEachOtherPage } from "./pages/AboutEachOtherPage";
 import { useChatSession } from "./hooks/useChatSession";
 import { useManagementActions } from "./hooks/useManagementActions";
 import { OverviewPage } from "./pages/OverviewPage";
@@ -24,22 +25,22 @@ import "./app.css";
 const nav: { id: Page; icon: string; label: string }[] = [
   { id: "overview", icon: "⌂", label: "运行总览" },
   { id: "chat", icon: "◌", label: "对话" },
+  { id: "about", icon: "✧", label: "关于彼此" },
   { id: "providers", icon: "◈", label: "模型服务" },
   { id: "channels", icon: "⌁", label: "QQ 渠道" },
-  { id: "mcp", icon: "◇", label: "MCP 服务" },
-  { id: "skills", icon: "▧", label: "Skills" },
+  { id: "plugins", icon: "◇", label: "插件" },
   { id: "diagnostics", icon: "⌘", label: "运行诊断" },
-  { id: "memory", icon: "✳", label: "长期记忆" },
+  { id: "memory", icon: "✳", label: "日记" },
 ];
 const titles: Record<Page, string> = {
   overview: "运行总览",
   chat: "对话",
   providers: "模型服务",
   channels: "QQ 渠道",
-  mcp: "MCP 服务",
-  skills: "Skills",
+  plugins: "插件",
   diagnostics: "运行诊断",
-  memory: "长期记忆",
+  about: "关于彼此",
+  memory: "日记",
 };
 const safe = async <T,>(promise: Promise<T>): Promise<ApiResult<T>> => {
   try {
@@ -53,8 +54,14 @@ const safe = async <T,>(promise: Promise<T>): Promise<ApiResult<T>> => {
 };
 function App() {
   const [page, setPage] = useState<Page>(() => {
-    const value = new URLSearchParams(location.search).get("page") as Page;
+    const raw = new URLSearchParams(location.search).get("page");
+    const value = (raw === "mcp" || raw === "skills" ? "plugins" : raw === "profile" ? "about" : raw) as Page;
     return nav.some((item) => item.id === value) ? value : "overview";
+  });
+  const [pluginTab, setPluginTab] = useState<"mcp" | "skills">(() => {
+    const params = new URLSearchParams(location.search);
+    return params.get("page") === "skills" || params.get("tab") === "skills"
+      ? "skills" : "mcp";
   });
   const [overview, setOverview] = useState<ReturnType<
     typeof deriveOverview
@@ -223,11 +230,18 @@ function App() {
       history.pushState(
         {},
         "",
-        target === "overview" ? "/" : `/?page=${target}`,
+        target === "overview" ? "/" : target === "plugins"
+          ? `/?page=plugins&tab=${pluginTab}` : `/?page=${target}`,
       );
     },
-    [busy, cancelRun, closeMobileMenu],
+    [busy, cancelRun, closeMobileMenu, pluginTab],
   );
+
+  function selectPluginTab(tab: "mcp" | "skills") {
+    setPluginTab(tab);
+    setPageError("");
+    history.pushState({}, "", `/?page=plugins&tab=${tab}`);
+  }
 
   useEffect(() => {
     void refreshOverview();
@@ -235,8 +249,11 @@ function App() {
     const onPop = () => {
       closeMobileMenu();
       const params = new URLSearchParams(location.search);
-      const target = (params.get("page") as Page) || "overview";
+      const raw = params.get("page") || "overview";
+      const target = (raw === "mcp" || raw === "skills" ? "plugins" : raw === "profile" ? "about" : raw) as Page;
       const id = params.get("conversation");
+      if (target === "plugins")
+        setPluginTab(raw === "skills" || params.get("tab") === "skills" ? "skills" : "mcp");
       setPage(nav.some((item) => item.id === target) ? target : "overview");
       setConversationId(id);
       if (id)
@@ -318,23 +335,25 @@ function App() {
           act={act}
         />
       );
-    if (page === "mcp")
+    if (page === "plugins")
       return (
-        <McpPage
-          reloadKey={pageRevision}
-          onLoadError={reportPageError}
-          act={act}
-          addMcp={addMcp}
-        />
-      );
-    if (page === "skills")
-      return (
-        <SkillsPage
-          reloadKey={pageRevision}
-          onLoadError={reportPageError}
-          act={act}
-          installSkill={installSkill}
-        />
+        <div className="plugins-page">
+          <div className="plugin-tabs" role="tablist" aria-label="插件类型">
+            <button role="tab" aria-selected={pluginTab === "mcp"}
+              onClick={() => selectPluginTab("mcp")}>MCP 服务</button>
+            <button role="tab" aria-selected={pluginTab === "skills"}
+              onClick={() => selectPluginTab("skills")}>Skills</button>
+          </div>
+          <div role="tabpanel" aria-label={pluginTab === "mcp" ? "MCP 服务" : "Skills"}>
+            {pluginTab === "mcp" ? (
+              <McpPage reloadKey={pageRevision} onLoadError={reportPageError}
+                act={act} addMcp={addMcp} />
+            ) : (
+              <SkillsPage reloadKey={pageRevision} onLoadError={reportPageError}
+                act={act} installSkill={installSkill} />
+            )}
+          </div>
+        </div>
       );
     if (page === "diagnostics")
       return (
@@ -342,6 +361,13 @@ function App() {
           reloadKey={pageRevision}
           onLoadError={reportPageError}
           act={act}
+        />
+      );
+    if (page === "about")
+      return (
+        <AboutEachOtherPage
+          reloadKey={pageRevision}
+          onLoadError={reportPageError}
         />
       );
     return null;
@@ -359,9 +385,9 @@ function App() {
       <aside className="sidebar">
         <div className="sidebar-content">
           <div className="brand">
-            <span className="brand-mark">知</span>
+            <span className="brand-mark">星</span>
             <div>
-              <strong>知语</strong>
+              <strong>星栖</strong>
               <small>Personal Agent</small>
             </div>
             <button
@@ -445,18 +471,18 @@ function App() {
               <div>
                 <small>
                   {page === "overview"
-                    ? "知语 · 本地 Agent"
+                    ? "星栖 · 本地 Agent"
                     : page === "providers"
                       ? "模型与推理"
                       : page === "channels"
                         ? "OneBot / NapCat"
-                        : page === "mcp"
-                          ? "外部工具与上下文"
-                          : page === "skills"
-                            ? "本地能力扩展"
-                            : page === "diagnostics"
+                        : page === "plugins"
+                          ? "MCP 服务与 Skills"
+                          : page === "diagnostics"
                               ? "事件、投递与故障"
-                              : "可查看、搜索与纠正"}
+                              : page === "memory"
+                                ? "每日观察与记忆沉淀"
+                                : "身份、人格与共同记忆"}
                 </small>
                 <h1>{titles[page]}</h1>
               </div>
@@ -469,12 +495,12 @@ function App() {
                     添加 Provider
                   </button>
                 )}
-                {page === "mcp" && (
+                {page === "plugins" && pluginTab === "mcp" && (
                   <button className="primary" onClick={() => void addMcp()}>
                     添加 MCP
                   </button>
                 )}
-                {page === "skills" && (
+                {page === "plugins" && pluginTab === "skills" && (
                   <button
                     className="primary"
                     onClick={() => void installSkill()}
@@ -527,7 +553,7 @@ function App() {
         <aside className="reminder-notices" aria-live="polite" aria-label="定时提醒">
           {reminderNotices.map((item) => (
             <div className="reminder-notice" key={`${item.id}:${item.fired_at}`}>
-              <strong>知语提醒</strong>
+              <strong>星栖提醒</strong>
               <p>{item.content}</p>
               <div>
                 <button onClick={() => {

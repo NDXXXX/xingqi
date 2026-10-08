@@ -12,5 +12,5 @@
   {"id": "obs-evidence-only", "user": "我养了一只猫", "assistant": "那你可以给它买玩具", "expected": [{"type": "fact"}], "forbidden_terms": ["买玩具"]},
   {"id": "obs-multi-merge", "user": "我不吃辣，对花生过敏", "assistant": "记住了", "expected": [{"type": "preference"}, {"type": "preference"}]},
   {"id": "obs-preference-change", "user": "我戒咖啡了，以后别推荐", "assistant": "好的", "expected": [{"type": "preference"}]},
-  {"id": "obs-project", "user": "我在做一个桌面 AI 助手项目，叫知语", "assistant": "听起来不错", "expected": [{"type": "project"}]}
+  {"id": "obs-project", "user": "我在做一个桌面 AI 助手项目，叫星栖", "assistant": "听起来不错", "expected": [{"type": "project"}]}
 ]

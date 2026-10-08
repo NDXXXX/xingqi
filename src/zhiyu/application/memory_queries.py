@@ -26,6 +26,7 @@ class MemoryQueryService(MemoryOperations):
                 _summary(db, item)
                 for item in self.memories.list_owned(db, identity_id, statuses=statuses, tier=tier)
                 if include_inactive
+                or tier == "episodic"
                 or item.tier == "core"
                 or item.promotion_status in {"pending", "deferred"}
             ]
@@ -132,7 +133,7 @@ class MemoryQueryService(MemoryOperations):
                 result["embedding"] = f"configured:{config.model}"
             return result
 
-    def consolidation_runs(self, limit: int = 5) -> list[dict]:
+    def consolidation_runs(self, limit: int = 5, offset: int = 0) -> list[dict]:
         from zhiyu.infrastructure.database.models import MemoryConsolidationRun
 
         with self.session_factory() as db:
@@ -141,6 +142,7 @@ class MemoryQueryService(MemoryOperations):
                 select(MemoryConsolidationRun)
                 .where(MemoryConsolidationRun.identity_id == identity_id)
                 .order_by(MemoryConsolidationRun.created_at.desc())
+                .offset(offset)
                 .limit(limit)
             )
             return [

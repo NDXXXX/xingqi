@@ -39,7 +39,7 @@ export function OverviewPage({ overview, overviewLoading, refreshOverview, navig
       : "warn";
     const healthRows = [
       {
-        name: "知语运行时",
+        name: "星栖运行时",
         detail: data.health ? "Web、Agent 与后台任务" : "接口读取失败",
         status: data.health
           ? data.health.started
@@ -140,9 +140,9 @@ export function OverviewPage({ overview, overviewLoading, refreshOverview, navig
         <div className="dashboard-top">
           <div className="dashboard-side">
             <article className="identity-card panel">
-              <div className="identity-mark">知</div>
+              <div className="identity-mark">星</div>
               <div>
-                <strong>知语</strong>
+                <strong>星栖</strong>
                 <small>Personal Agent</small>
               </div>
               <span className={`status-pill ${statusClass}`}>
@@ -282,7 +282,7 @@ export function OverviewPage({ overview, overviewLoading, refreshOverview, navig
                       : "最近 50 条渠道事件均已处理。"
                   : "事件状态不可用"}
               </p>
-              <small>知语 · 本地运行概览</small>
+              <small>星栖 · 本地运行概览</small>
             </div>
             <div className="simple-list">
               {data.events ? (

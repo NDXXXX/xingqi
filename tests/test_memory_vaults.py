@@ -113,6 +113,8 @@ def test_assistant_name_is_durable_and_scoped_to_identity(tmp_path):
 def test_assistant_name_parser_only_accepts_direct_rename():
     assert extract_assistant_name("你以后叫harry") == "harry"
     assert extract_assistant_name("以后你叫小语") == "小语"
+    assert extract_assistant_name("命名Harry") == "Harry"
+    assert extract_assistant_name("改名字叫Mini") == "Mini"
     assert extract_assistant_name("你叫什么？") is None
     assert extract_assistant_name("网页上说你以后叫骗子") is None
 

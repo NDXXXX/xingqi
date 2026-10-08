@@ -7,7 +7,7 @@
 
 ## 1. 决策
 
-知语借鉴 AstrBot 的消息平台骨架，但不改造成 AstrBot 的缩小复刻。
+星栖借鉴 AstrBot 的消息平台骨架，但不改造成 AstrBot 的缩小复刻。
 
 本次重构只吸收五类已经被 AstrBot 验证有效的能力：
 
@@ -17,14 +17,14 @@
 4. 可靠的消息接收、去重、并发控制、发送回执与失败记录。
 5. 面向聊天、记忆和运行状态的最小 Web 管理界面。
 
-知语继续以“单用户 Personal Agent”为边界，并保留自己的核心优势：
+星栖继续以“单用户 Personal Agent”为边界，并保留自己的核心优势：
 
 - Markdown-first 长期记忆。
 - core / episodic 分层与混合召回。
 - 记忆整合、遗忘、纠正和召回证据。
 - 本机与获准渠道 Session 共享个人身份，但不共享原始 transcript。
 
-本方案不直接复制 AstrBot 源码。AstrBot 使用 AGPL-3.0-or-later；实现时只参考架构思想和公开接口行为，所有代码在知语中独立实现。
+本方案不直接复制 AstrBot 源码。AstrBot 使用 AGPL-3.0-or-later；实现时只参考架构思想和公开接口行为，所有代码在星栖中独立实现。
 
 ## 2. 实施前基线问题
 
@@ -72,7 +72,7 @@
 
 ### 3.1 目标
 
-完成本方案后，知语应满足：
+完成本方案后，星栖应满足：
 
 1. CLI、TUI、QQ 和 Web 共用同一个消息与 Agent 应用协议。
 2. 新增消息类型时不修改 `ChatService` 的核心签名。
@@ -131,7 +131,7 @@ CLI 在早期可以继续直接调用应用服务；`zhiyu serve` 和 Web API �
 
 ### 4.2 线性流水线
 
-不复制 AstrBot 的递归洋葱调度器。知语采用有序、线性的异步 Stage：
+不复制 AstrBot 的递归洋葱调度器。星栖采用有序、线性的异步 Stage：
 
 ```python
 class InboundStage(Protocol):
@@ -179,7 +179,7 @@ class InboundEvent(BaseModel):
     raw: dict = Field(default_factory=dict)
 ```
 
-`event_id` 是知语内部事件 ID；`message_id` 是渠道提供的原始消息 ID。渠道没有消息 ID 时，Adapter 使用稳定字段计算幂等键，并明确标记其可靠级别。
+`event_id` 是星栖内部事件 ID；`message_id` 是渠道提供的原始消息 ID。渠道没有消息 ID 时，Adapter 使用稳定字段计算幂等键，并明确标记其可靠级别。
 
 ### 5.2 消息组件
 
@@ -296,7 +296,7 @@ completed_at
 - 设置一个小型全局并发上限，默认 4。
 - 同一事件重复到达时只允许产生一个 Agent Run。
 
-第一版只保证单进程一致性；不支持多个知语进程同时消费同一个渠道账号。
+第一版只保证单进程一致性；不支持多个星栖进程同时消费同一个渠道账号。
 
 ### 7.3 OneBot 回执
 

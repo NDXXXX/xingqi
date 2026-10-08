@@ -225,7 +225,7 @@ class SkillService:
     ) -> dict:
         item = self._get(name)
         if item is None:
-            raise ValueError("只能更新通过知语安装并登记的 Skill")
+            raise ValueError("只能更新通过星栖安装并登记的 Skill")
         if item.trashed_at:
             raise ValueError("Skill 已在回收站，请先恢复")
         target = Path(item.installed_path)
@@ -288,7 +288,7 @@ class SkillService:
     def remove(self, name: str) -> Path:
         item = self._get(name)
         if item is None or item.trashed_at:
-            raise ValueError("只能移除知语登记的用户 Skill")
+            raise ValueError("只能移除星栖登记的用户 Skill")
         target = Path(item.installed_path)
         if target.is_symlink() or not target.is_dir() or target.parent.resolve() != self.skills_dir.resolve():
             raise ValueError("Skill 安装路径异常，拒绝移动")

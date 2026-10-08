@@ -37,7 +37,7 @@ def _database():
 NATURAL_REWRITES = (
     ("早上锻炼怎么安排", "用户习惯晨跑"),
     ("给我推荐不含肉的晚餐", "用户偏好素食饮食"),
-    ("接着做那个桌面助手", "用户正在开发知语个人 AI 助手"),
+    ("接着做那个桌面助手", "用户正在开发星栖个人 AI 助手"),
     ("我对象最近怎么样", "李梅是用户的女朋友"),
     ("别给我太啰嗦", "用户喜欢简洁回答"),
     ("搬家前我住哪儿", "用户曾居住在北京"),
@@ -120,11 +120,11 @@ def test_query_builder_uses_recent_user_context_for_reference():
     plan = build_query_plan(
         "接着做那个项目",
         history=[
-            {"role": "user", "content": "我们刚才在讨论知语桌面助手"},
+            {"role": "user", "content": "我们刚才在讨论星栖桌面助手"},
             {"role": "assistant", "content": "好"},
         ],
     )
-    assert any("知语桌面助手" in variant for variant in plan.variants)
+    assert any("星栖桌面助手" in variant for variant in plan.variants)
     assert plan.recall_intent is True
 
 
@@ -136,9 +136,9 @@ def test_rrf_result_is_deterministic_and_channels_are_separate():
         target = repo.create(
             db,
             type="project",
-            content="用户正在开发知语个人 AI 助手",
+            content="用户正在开发星栖个人 AI 助手",
             identity_id=identity_id,
-            trigger_text="知语,桌面助手",
+            trigger_text="星栖,桌面助手",
         )
         repo.create(
             db,
@@ -148,8 +148,8 @@ def test_rrf_result_is_deterministic_and_channels_are_separate():
         )
         db.commit()
         memories = repo.list_owned(db, identity_id)
-        first = hybrid_rank(db, "继续知语桌面助手", memories)
-        second = hybrid_rank(db, "继续知语桌面助手", memories)
+        first = hybrid_rank(db, "继续星栖桌面助手", memories)
+        second = hybrid_rank(db, "继续星栖桌面助手", memories)
         assert [item.memory.id for item in first.selected] == [
             item.memory.id for item in second.selected
         ]

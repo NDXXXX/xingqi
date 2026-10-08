@@ -13,7 +13,7 @@ from zhiyu.core.recall import format_welcome
 
 
 class ChatApp(App):
-    TITLE = "知语"
+    TITLE = "星栖"
 
     CSS = """
     #messages {
@@ -193,7 +193,7 @@ class ChatApp(App):
             return "当前还没有会话"
         messages = self._conversations.history(self._conversation_id) or []
         return "\n".join(
-            f"{'你' if m['role'] == 'user' else '知语'}> {m['content']}" for m in messages[-20:]
+            f"{'你' if m['role'] == 'user' else '星栖'}> {m['content']}" for m in messages[-20:]
         )
 
     def _character_text(self) -> str:

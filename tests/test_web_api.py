@@ -88,7 +88,7 @@ def test_web_chat_stream_and_shared_conversation(tmp_path):
     with client:
         page = client.get("/")
         assert page.status_code == 200
-        assert "知语" in page.text
+        assert "星栖" in page.text
         assert 'id="root"' in page.text
         assert '/react/app.js' in page.text
         assert client.get("/react/app.js").status_code == 200

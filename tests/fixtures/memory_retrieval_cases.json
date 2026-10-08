@@ -96,7 +96,7 @@
     {"id":"time-19","category":"temporal","query":"目前正在制作的线上页面是什么","target":"用户正在制作个人网站"},
     {"id":"time-20","category":"temporal","query":"以前在做游戏的哪类公司上班","target":"用户在一家游戏公司工作"},
 
-    {"id":"entity-01","category":"entity_alias","query":"知语这个桌面助理继续开发","target":"用户正在开发一个本地 AI 助手"},
+    {"id":"entity-01","category":"entity_alias","query":"星栖这个桌面助理继续开发","target":"用户正在开发一个本地 AI 助手"},
     {"id":"entity-02","category":"entity_alias","query":"Model Context Protocol 的集成进度","target":"用户正在完成 MCP 接入"},
     {"id":"entity-03","category":"entity_alias","query":"JLPT 最高等级怎么复习","target":"用户的目标是通过日语 N1"},
     {"id":"entity-04","category":"entity_alias","query":"杭城的居住安排","target":"用户目前住在杭州"},

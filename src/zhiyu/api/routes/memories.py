@@ -16,8 +16,11 @@ def build_memories_router(memories: MemoryService) -> APIRouter:
         return memories.index_status()
 
     @router.get("/api/memory-consolidation-runs")
-    async def consolidation_runs(limit: int = Query(default=5, ge=1, le=20)):
-        return memories.consolidation_runs(limit)
+    async def consolidation_runs(
+        limit: int = Query(default=5, ge=1, le=20),
+        offset: int = Query(default=0, ge=0),
+    ):
+        return memories.consolidation_runs(limit, offset)
 
     @router.get("/api/memories")
     async def list_memories(

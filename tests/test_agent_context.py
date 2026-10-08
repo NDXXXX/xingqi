@@ -190,7 +190,7 @@ async def test_async_context_uses_semantic_summary_when_checkpoint_advances():
 
     async def summarize(deterministic_summary):
         calls.append(deterministic_summary)
-        return "用户提出了一个长期事项，知语给出过初步答复。"
+        return "用户提出了一个长期事项，星栖给出过初步答复。"
 
     compacted = await with_agent_context_async(
         db,
@@ -208,7 +208,7 @@ async def test_async_context_uses_semantic_summary_when_checkpoint_advances():
 
     checkpoint = db.get(models.ConversationSummary, conversation.id)
     assert calls and "很早" in calls[0]
-    assert checkpoint.content == "用户提出了一个长期事项，知语给出过初步答复。"
+    assert checkpoint.content == "用户提出了一个长期事项，星栖给出过初步答复。"
     assert any("用户提出了一个长期事项" in item.get("content", "") for item in compacted)
     db.close()
 

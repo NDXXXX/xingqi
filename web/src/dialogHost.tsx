@@ -94,7 +94,7 @@ function DialogHost() {
     <Modal>
       <Modal.Backdrop isOpen={Boolean(active)} onOpenChange={(open) => { if (!open) finish(null); }} variant="blur">
         <Modal.Container placement="center" size="sm">
-          <Modal.Dialog aria-label={active?.title || "知语对话框"} className="zh-modal">
+          <Modal.Dialog aria-label={active?.title || "星栖对话框"} className="zh-modal">
             {({ close }) => <>
               <Modal.Header className="zh-modal-header">
                 <div><span className="zh-modal-eyebrow">ZHIYU · LOCAL AGENT</span><Modal.Heading>{active?.title}</Modal.Heading></div>

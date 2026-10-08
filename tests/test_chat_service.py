@@ -192,7 +192,7 @@ async def test_explicit_assistant_rename_is_used_on_same_and_next_turn(tmp_path)
     store = MemoryStore(tmp_path)
     service = ChatService(sessions, Router(captured), MemoryManager(store))
     first = await service.complete(ChatRequest(
-        message="你以后叫Harry", provider_id=provider_id, model=model
+        message="命名Harry", provider_id=provider_id, model=model
     ))
     assert "你的名字是“Harry”" in str(captured.prompts[0])
     await service.memory_processor.wait_idle()
@@ -203,6 +203,24 @@ async def test_explicit_assistant_rename_is_used_on_same_and_next_turn(tmp_path)
     ))
     assert "你的名字是“Harry”" in str(captured.prompts[-1])
     await service.memory_processor.wait_idle()
+
+    await service.complete(ChatRequest(
+        message="改名字叫Mini", provider_id=provider_id, model=model,
+    ))
+    assert "你的名字是“Mini”" in str(captured.prompts[-1])
+    await service.memory_processor.wait_idle()
+
+    await service.complete(ChatRequest(
+        message="你叫什么", provider_id=provider_id, model=model,
+    ))
+    assert "你的名字是“Mini”" in str(captured.prompts[-1])
+    assert "你的名字是“Harry”" not in str(captured.prompts[-1])
+    await service.memory_processor.wait_idle()
+    with sessions() as db:
+        identity_id = IdentityRepository().local(db).id
+    assert [entry.content for entry in store.read_entries(store.identity_path_for(identity_id))] == [
+        "助手名字是 Mini"
+    ]
 
 
 async def test_explicit_remember_is_available_in_same_turn(tmp_path):

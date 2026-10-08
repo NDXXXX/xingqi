@@ -45,7 +45,7 @@ export function ChatPage({
               key={`${item.id || index}`}
               className={`message ${item.role} ${item.error ? "error" : ""}`}
             >
-              <span className="role">{item.role === "user" ? "你" : "知语"}</span>
+              <span className="role">{item.role === "user" ? "你" : "星栖"}</span>
               <span className="content">
                 {item.content}
                 {item.error && (
@@ -63,7 +63,7 @@ export function ChatPage({
           ))
         ) : (
           <div className="empty-state">
-            <span>知</span>
+            <span>星</span>
             <h2>有什么想一起处理的？</h2>
             <p>对话、工具与长期记忆都由同一个本地 Agent 处理。</p>
           </div>

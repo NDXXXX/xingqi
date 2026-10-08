@@ -10,12 +10,14 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from zhiyu.api.routes.agent import build_agent_router
+from zhiyu.api.routes.assistant_profile import build_assistant_profile_router
 from zhiyu.api.routes.channels import build_channels_router
 from zhiyu.api.routes.mcp import build_mcp_router
 from zhiyu.api.routes.memories import build_memories_router
 from zhiyu.api.routes.providers import build_provider_router
 from zhiyu.api.routes.skills import build_skills_router
 from zhiyu.application.memories import MemoryService
+from zhiyu.application.assistant_profile import AssistantProfileService
 from zhiyu.application.providers import ProviderService
 from zhiyu.application.runtime import RuntimeHost
 from zhiyu.application.skills import SkillService
@@ -27,6 +29,7 @@ def create_app(host: RuntimeHost | None = None) -> FastAPI:
     memory_manager = runtime.chat_service.memory_processor.memory_manager
     store = getattr(memory_manager, "store", None)
     memories = MemoryService(session_factory, store=store)
+    assistant_profile = AssistantProfileService(session_factory, store=store)
     providers = ProviderService(session_factory, router=runtime.chat_service.providers)
     skills = SkillService(session_factory)
 
@@ -38,7 +41,7 @@ def create_app(host: RuntimeHost | None = None) -> FastAPI:
         finally:
             await runtime.stop()
 
-    app = FastAPI(title="知语", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="星栖", version="0.1.0", lifespan=lifespan)
     app.state.runtime = runtime
     app.include_router(build_provider_router(providers))
     app.include_router(build_mcp_router(runtime))
@@ -46,6 +49,7 @@ def create_app(host: RuntimeHost | None = None) -> FastAPI:
     app.include_router(build_channels_router(runtime))
     app.include_router(build_agent_router(runtime))
     app.include_router(build_memories_router(memories))
+    app.include_router(build_assistant_profile_router(assistant_profile))
 
     @app.middleware("http")
     async def local_api_only(request: Request, call_next):

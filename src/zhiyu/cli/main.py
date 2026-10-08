@@ -19,7 +19,7 @@ from zhiyu.infrastructure.database.migrations import upgrade_database
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="zhiyu", description="知语 Personal AI Agent")
+    parser = argparse.ArgumentParser(prog="zhiyu", description="星栖 Personal AI Agent")
     parser.add_argument("--debug", action="store_true", help="显示完整异常")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -279,7 +279,7 @@ def _serve(args) -> None:
 
     from zhiyu.api import create_app
 
-    print(f"知语 WebUI：http://{args.host}:{args.port}")
+    print(f"星栖 WebUI：http://{args.host}:{args.port}")
     uvicorn.run(create_app(), host=args.host, port=args.port)
 
 def run(argv: list[str] | None = None) -> int:

@@ -8,7 +8,7 @@
 
 ## 1. 结论
 
-当前 QQ 链路已经完成真实端到端验证：NapCat Docker 能连接知语，真实消息可以触发 Agent，并把回复成功发送回 QQ。下一步不应继续增加外围功能，而应先把这条链路变成可长期运行、可恢复、可管理的产品能力。
+当前 QQ 链路已经完成真实端到端验证：NapCat Docker 能连接星栖，真实消息可以触发 Agent，并把回复成功发送回 QQ。下一步不应继续增加外围功能，而应先把这条链路变成可长期运行、可恢复、可管理的产品能力。
 
 本方案作出以下决定：
 
@@ -26,7 +26,7 @@
 
 用户没有另行指定时，本方案按以下默认值实施：
 
-- 部署目标是当前 macOS 单机；NapCat 运行在 Docker Desktop，知语运行在宿主机。
+- 部署目标是当前 macOS 单机；NapCat 运行在 Docker Desktop，星栖运行在宿主机。
 - QQ 渠道只允许已配置的主人使用，包括群聊场景；不向群成员开放个人 Agent。
 - 图片需要在所选模型支持视觉输入时被模型理解；语音第一版只收发，不做 STT/TTS。
 - 当前只运行一个 NapCat/QQ 账号，但所有新增记录带账号命名空间，避免未来破坏性迁移。
@@ -43,7 +43,7 @@
 - 单主人权限、可选群聊和群内必须 @。
 - 同会话串行、不同会话并行。
 - QQ Session 与本机 Session 共享 local identity 的长期记忆。
-- NapCat Docker 到知语的真实链路已经验证，事件、投递和 Agent Run 均成功落库。
+- NapCat Docker 到星栖的真实链路已经验证，事件、投递和 Agent Run 均成功落库。
 - 统一消息层已经定义文本、图片、语音、文件、@ 和引用组件。
 
 ### 2.2 初稿时尚未完成（历史基线）
@@ -76,9 +76,9 @@
 ### 3.2 非目标
 
 - 不建设 AstrBot 式插件市场、通用工作流、多租户或陌生人公共机器人。
-- 不让知语自动安装、升级或控制 Docker Desktop。
-- 不承诺外部 QQ 平台上的严格 exactly-once；只能保证知语内部的幂等执行和保守投递。
-- 不把 NapCat 二维码登录嵌入知语 WebUI，登录仍在 NapCat WebUI 完成。
+- 不让星栖自动安装、升级或控制 Docker Desktop。
+- 不承诺外部 QQ 平台上的严格 exactly-once；只能保证星栖内部的幂等执行和保守投递。
+- 不把 NapCat 二维码登录嵌入星栖 WebUI，登录仍在 NapCat WebUI 完成。
 - 第一里程碑不实现语音转写和语音合成供应商；先完整传输语音并提供稳定降级。STT/TTS 作为独立后续能力接入。
 - 没有官方 AppID、密钥和已确认的开放平台权限前，不伪造或猜测官方 QQ Bot 协议实现。
 - 本轮不实现多个 QQ 账号同时在线、账号切换或账号管理页面。
@@ -190,9 +190,9 @@ pending → processing → responded → completed
 - NapCat WebUI 仅绑定 `127.0.0.1`，默认端口 `6099`。
 - 当前默认账号使用独立持久目录；未来增加账号时，每个账号必须使用独立数据目录、服务名和 WebUI 端口。
 - Reverse WebSocket 指向 `ws://host.docker.internal:<port>/ws`。
-- 知语监听非 loopback 地址时必须启用高强度 Token，并明确本机防火墙要求。
+- 星栖监听非 loopback 地址时必须启用高强度 Token，并明确本机防火墙要求。
 - Compose 配置健康检查和 `restart: unless-stopped`，登录数据放在持久卷中。
-- 提供 `zhiyu qq doctor` 做只读检查：Docker 可达性、WebUI、反向 WS 地址、Token 配置和知语监听状态。它不执行 Docker 管理命令。
+- 提供 `zhiyu qq doctor` 做只读检查：Docker 可达性、WebUI、反向 WS 地址、Token 配置和星栖监听状态。它不执行 Docker 管理命令。
 
 ## 6. 优先级二：QQ 渠道能力
 

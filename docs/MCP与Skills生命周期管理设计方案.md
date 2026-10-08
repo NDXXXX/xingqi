@@ -7,7 +7,7 @@
 
 ## 1. 结论
 
-当前知语已能运行 MCP stdio Server、把 MCP 工具加入 Agent，并从本地 Skills 目录读取 `SKILL.md`。但用户还不能完整检查连接、处理运行中断、配置秘密环境变量、使用 MCP Resources/Prompts，或安装和维护 Skill。
+当前星栖已能运行 MCP stdio Server、把 MCP 工具加入 Agent，并从本地 Skills 目录读取 `SKILL.md`。但用户还不能完整检查连接、处理运行中断、配置秘密环境变量、使用 MCP Resources/Prompts，或安装和维护 Skill。
 
 本方案把 MCP 和 Skills 做成可日常使用的本地能力管理：
 
@@ -65,7 +65,7 @@
 1. 按 CLI 提示添加一个本机 stdio MCP 或远程 HTTP MCP，验证成功后启用。
 2. 给 MCP 配置环境变量和秘密，不需要把 API Key 写入数据库、命令历史或日志。
 3. 查看 Server 连接状态、工具列表、权限范围、Resources、Prompts 和最近错误。
-4. 运行一次 MCP 连接测试；在 Server 断线后无需重启知语即可自动恢复或手动重连。
+4. 运行一次 MCP 连接测试；在 Server 断线后无需重启星栖即可自动恢复或手动重连。
 5. 从一个本地 Skill 文件夹或 Git 仓库安装 Skill，查看内容/依赖检查结果，再启用它。
 6. 检查 Skill 更新差异，执行升级；升级失败时恢复到前一版本。
 7. 禁用或卸载用户安装的 Skill；误删可以恢复，内置 Skill 不会被删除。
@@ -177,7 +177,7 @@ zhiyu mcp doctor
 - 环境变量名必须符合系统变量命名规则，值默认不显示。
 - 普通变量可以写入配置数据库，但 `list/show/logs` 只显示变量名和“已设置”。
 - 标记为 Secret 的值通过隐藏输入写入 Keychain，数据库只存 `secret_ref`。
-- 绝不继承知语进程的全部环境变量给 stdio 子进程；使用显式最小环境 allowlist，再加用户配置的变量。
+- 绝不继承星栖进程的全部环境变量给 stdio 子进程；使用显式最小环境 allowlist，再加用户配置的变量。
 - HTTP 凭据以受控 Secret Header 或 Bearer Token 形式传入；禁止将秘密拼接到 URL、命令或日志。
 - Keychain 不可用时拒绝保存 Secret；不能降级为明文文件或数据库。
 - 更新/删除秘密遵循事务顺序：先写入新 Secret，再提交配置引用；失败回滚旧配置；移除时先解除引用再安全删除旧 Keychain 项。
@@ -188,7 +188,7 @@ zhiyu mcp doctor
 - 用户通过 `zhiyu mcp tools NAME --allow tool_a --allow tool_b` 明确授权。
 - allowlist 按 Server 稳定 ID + 工具原名保存；Server 更新后新增工具不会自动获得权限。
 - 同名工具总是映射成 `server_name.tool_name`，不能覆盖内置工具或其他 Server。
-- MCP Server 的 `instructions`、工具描述、资源内容和 Prompt 内容均视为外部数据，不得覆盖知语系统策略。
+- MCP Server 的 `instructions`、工具描述、资源内容和 Prompt 内容均视为外部数据，不得覆盖星栖系统策略。
 - 有副作用的 MCP 工具必须在工具元数据/CLI 诊断中可见；第一版仍由全局 Agent 工具调用策略限制，不增加隐式自动审批。
 - Server 被禁用或失联时，Agent 可用工具集合立即移除其工具，不使用过期连接对象。
 
@@ -232,7 +232,7 @@ disabled → stopped → connecting → ready
 
 ### 7.1 安装位置和身份
 
-- 内置 Skills 位于程序包目录，只读，由知语发布版本管理。
+- 内置 Skills 位于程序包目录，只读，由星栖发布版本管理。
 - 用户 Skills 放在 `ZHIYU_SKILLS_DIR`（默认 `~/.zhiyu/skills`）。
 - 安装目录使用 Skill 唯一 `name`，禁止路径穿越、软链接逃逸和覆盖内置 Skill。
 - 不允许两个来源提供同名 Skill；`show` 明确指出冲突与来源。
@@ -247,7 +247,7 @@ disabled → stopped → connecting → ready
 1. 本地目录：目录中必须恰有一个有效 `SKILL.md` 根 Skill，复制到受管目录。
 2. Git 仓库：用户指定仓库 URL，可选 `--ref` 和仓库内 Skill 子目录；仅下载 Git 内容，不执行 clone hook、构建脚本或包安装脚本。
 
-本地 ZIP、URL 任意压缩包、市场源和依赖自动安装留待后续。Git 源默认要求 HTTPS 或本地路径；SSH 私钥认证不由知语代管。首次安装展示源地址、解析 commit、文件列表和权限声明，再确认安装。
+本地 ZIP、URL 任意压缩包、市场源和依赖自动安装留待后续。Git 源默认要求 HTTPS 或本地路径；SSH 私钥认证不由星栖代管。首次安装展示源地址、解析 commit、文件列表和权限声明，再确认安装。
 
 ### 7.3 Skill manifest
 
@@ -268,9 +268,9 @@ permissions:
 
 - `name` 必须符合小写字母、数字和连字符规则。
 - `version` 可选；缺少时使用已解析 Git commit 或本地内容哈希标识，不虚构语义版本。
-- `required_tools` 表示运行所需知语工具；缺失时 Skill 标记为 unavailable，并列出缺失工具。
+- `required_tools` 表示运行所需星栖工具；缺失时 Skill 标记为 unavailable，并列出缺失工具。
 - `requires_bins` 只做 PATH 存在性检查，不自动安装和执行。
-- `permissions` 是 Skill 对能力的声明，不能自行授予权限；安装者/管理员还须在知语全局权限中批准，实际可用权限取交集。
+- `permissions` 是 Skill 对能力的声明，不能自行授予权限；安装者/管理员还须在星栖全局权限中批准，实际可用权限取交集。
 - 未知 frontmatter 字段在验证报告中警告，不影响加载；损坏的 YAML、重复字段和非法名阻止安装或更新。
 - Skill 正文和来源 README 视为不可信指令，不能成为 system prompt，不可要求 Agent 忽略上层策略。
 
@@ -303,7 +303,7 @@ zhiyu skills reload
 - 内置 Skill 只能在 `show` 查看，不允许 CLI 更新/删除。
 - Skills 文件变化后立即原子 reload registry；reload 失败时维持旧快照，并报告具体文件错误。
 - 工具运行中的 Agent 使用开始时捕获的 registry 快照，防止更新 Skill 后中途行为改变。
-- 包含可执行脚本的 Skill 可以安装和阅读，但知语不执行脚本、不自动将脚本加入 PATH。
+- 包含可执行脚本的 Skill 可以安装和阅读，但星栖不执行脚本、不自动将脚本加入 PATH。
 - CLI 安装/更新/启停成功后递增 `skills_registry_revision`；Runtime reconciler 发现变化后原子替换 Registry 快照，正在运行的 Agent 保留旧快照直到本次运行结束。
 
 ### 7.5 使用与运行诊断

@@ -1,4 +1,4 @@
-# 知语对齐 OpenClaw 记忆机制设计方案
+# 星栖对齐 OpenClaw 记忆机制设计方案
 
 > 日期：2026-10-08
 >
@@ -6,11 +6,11 @@
 >
 > 基准：OpenClaw 当前默认 `memory-core`，以及与它配套的 Active Memory、Dreaming、会话压缩和前瞻性记忆。依据文末官方文档；OpenClaw 后续版本变化需重新核对。
 >
-> 范围：知语 CLI/TUI、Web、QQ 共用的本机个人 Agent 记忆。下文描述目标契约，实际进度见第 9 节。
+> 范围：星栖 CLI/TUI、Web、QQ 共用的本机个人 Agent 记忆。下文描述目标契约，实际进度见第 9 节。
 
 ## 1. 目标和边界
 
-用户要求“完全按照他的那一套记忆机制”。本方案把它定义为**可观察行为对齐**：同一类信息进入相同层级，经过同类来源门槛、检索、后台整理、注入、遗忘和恢复流程。知语仍用现有 Python、SQLite、Markdown 和本机身份体系实现；复制 OpenClaw 的插件框架、TypeScript 类名或管理界面，不会使记忆行为更一致。
+用户要求“完全按照他的那一套记忆机制”。本方案把它定义为**可观察行为对齐**：同一类信息进入相同层级，经过同类来源门槛、检索、后台整理、注入、遗忘和恢复流程。星栖仍用现有 Python、SQLite、Markdown 和本机身份体系实现；复制 OpenClaw 的插件框架、TypeScript 类名或管理界面，不会使记忆行为更一致。
 
 完成后应满足：
 
@@ -21,13 +21,13 @@
 5. 文件可编辑，索引可重建；会话遗忘、文件编辑、并发修改和中途崩溃后不会复活已删除内容或跨身份串数据。
 6. 记忆故障不吞掉聊天回复，且能够诊断本轮为什么召回、跳过或未晋升某条记忆。
 
-已有的[文件记忆重构方案](OpenClaw式文件记忆系统重构设计方案.md)和[增量改进方案](记忆系统增量改进设计方案.md)仍是知语历史设计记录。它们的“仅供参考、不要求复制完整机制”和“暂不实现 REM”与本次目标冲突；**以后续实施以本文为准**。已上线的来源隔离、Mutation Journal、文件权威和安全边界不倒退。
+已有的[文件记忆重构方案](OpenClaw式文件记忆系统重构设计方案.md)和[增量改进方案](记忆系统增量改进设计方案.md)仍是星栖历史设计记录。它们的“仅供参考、不要求复制完整机制”和“暂不实现 REM”与本次目标冲突；**以后续实施以本文为准**。已上线的来源隔离、Mutation Journal、文件权威和安全边界不倒退。
 
 ## 2. 对照基线
 
 OpenClaw 的默认 Memory Core 将 `MEMORY.md` / `USER.md` 作为精选核心，`memory/YYYY-MM-DD.md` 和会话记录作为情景层，`DREAMS.md` 作为只供人审阅的报告；来源等级存入 SQLite。普通回合先走无需模型调用的核心加载、混合搜索与可信触发器；历史问题且快速通道没有强命中时，Active Memory 才升级到深度搜索。Dreaming 按 light → REM → deep 整理，deep 通过分数、召回次数、不同查询次数三道门槛后再调用模型合并或替换。[官方架构](https://docs.openclaw.ai/concepts/memory-architecture)、[内置引擎](https://docs.openclaw.ai/concepts/memory-builtin)、[Dreaming](https://docs.openclaw.ai/concepts/dreaming)。
 
-| 环节 | 知语当前代码 | 对齐后的行为 |
+| 环节 | 星栖当前代码 | 对齐后的行为 |
 | --- | --- | --- |
 | 文件与索引 | `store.py` 管理按 identity 隔离的 `USER.md`、`MEMORY.md`、`daily/*.md`、`DREAMS.md`；`Memory` 表缓存正文与状态 | 保留文件权威和身份隔离；增加可重建的 FTS5 chunk 索引、来源与阶段状态；正文缓存不反向覆盖文件 |
 | 助手身份 | 默认名字写在 `context.py` 提示词；用户改名可能留在一条情景记忆 | 独立 `IDENTITY.md`，明确改名直接更新身份，回答名称先读身份，避免 Harry 这类漏召回 |
@@ -39,7 +39,7 @@ OpenClaw 的默认 Memory Core 将 `MEMORY.md` / `USER.md` 作为精选核心，
 | 遗忘 | `memory_lifecycle.py` 支持按记忆和来源会话遗忘、墓碑和恢复 | 按会话来源图预览与删除，混合来源条目按 OpenClaw 的整条删除语义处理，并阻止未来重新摄取 |
 | 压缩 | `context.py` 已有会话摘要检查点 | 压缩前先持久化未写入的可记忆信息，再压缩当前会话；摘要不是跨会话长期记忆 |
 
-以上现状以 2026-10-08 的源码为准，尤其要注意现有代码的 `trust` 和 `MemorySource` 已有基础，但并不等于完整的来源污染传播或会话类型门槛。
+上表记录本轮改造开始前的基线；已经实施的变化以第 9 节为准。原有代码的 `trust` 和 `MemorySource` 已有基础，但并不等于完整的来源污染传播或会话类型门槛。
 
 ## 3. 记忆层级与文件契约
 
@@ -62,7 +62,8 @@ OpenClaw 的默认 Memory Core 将 `MEMORY.md` / `USER.md` 作为精选核心，
 | `MEMORY.md` | 主人明确“记住”或 deep 阶段 | 受信任、预算内的精选事实；项目/目标有时间和替代关系 |
 | `daily/*.md` | 后台观察、会话摄取、压缩前 flush | 只经 `memory_search` 或深度召回；不自动注入 |
 | 会话原文 | 当前 `messages` 表 | 当前会话按检查点读取；其他会话仅经获准历史检索 |
-| 站立意图 | SQLite 的确定性 trigger 状态 | 满足时间/事件触发条件时最多注入 3 项；不把“提醒我”当普通事实 |
+| 事件意图 | SQLite 的确定性 trigger 状态 | 匹配话题时最多注入 3 项；不把“提醒我”当普通事实 |
+| 定时提醒 | 独立调度任务；现有 SQLite 时间提醒在迁移期继续可用 | 到期时投递一次或按用户指定周期投递，不依赖聊天话题 |
 | `DREAMS.md` | 整理器 | 仅管理页、CLI 和文件阅读；不喂回整理器 |
 
 文件条目保留现有 `zhiyu:id` 稳定寻址，并增加与 OpenClaw 相同语义的行尾 `trigger`、`importance`、`project` 注释；正文由 Markdown 掌握，来源类别、会话类型、可信状态、遗忘墓碑只能由 SQLite 掌握。自动写入的核心条目必须附来源锚点和时间；人工编辑可以改变文字，但不能靠注释提升来源等级。助手名称属于身份文件，即使尚未晋升，明确的“你以后叫 Harry”也应成为当前有效身份；旧名留在审计历史而不与新名并列加载。[官方用户模型](https://docs.openclaw.ai/concepts/user-model)、[官方工作区文件](https://docs.openclaw.ai/concepts/agent)。
@@ -96,7 +97,7 @@ OpenClaw 的默认 Memory Core 将 `MEMORY.md` / `USER.md` 作为精选核心，
 
 ### 5.2 两级召回
 
-**快速通道**每个合格互动回合执行，零额外模型调用：按预算加载 `IDENTITY.md`、受信任 `USER.md` 与 `MEMORY.md`，文件更新下一轮可见；`USER.md` 按官方独立的 4,000 字符上限管理。私人直接会话可加载精选私人记忆，群聊和渠道会话不默认加载私人核心；知语现有 QQ 主人权限校验不能替代这个上下文边界。再对核心条目的短 trigger 运行词法/向量预筛，强命中阈值默认 0.65，最多补 3 条。项目记忆只有在当前项目匹配时才可触发；没有项目身份时不推断项目。核心文件超过预算时按明确的文件级规则省略并告警，不靠静默截断产生半条指令。情景记忆无论相似度多高都不进此通道。
+**快速通道**每个合格互动回合执行，零额外模型调用：按预算加载 `IDENTITY.md`、受信任 `USER.md` 与 `MEMORY.md`，文件更新下一轮可见；`USER.md` 按官方独立的 4,000 字符上限管理。私人直接会话可加载精选私人记忆，群聊和渠道会话不默认加载私人核心；星栖现有 QQ 主人权限校验不能替代这个上下文边界。再对核心条目的短 trigger 运行词法/向量预筛，强命中阈值默认 0.65，最多补 3 条。项目记忆只有在当前项目匹配时才可触发；没有项目身份时不推断项目。核心文件超过预算时按明确的文件级规则省略并告警，不靠静默截断产生半条指令。情景记忆无论相似度多高都不进此通道。
 
 **深度通道**仅在用户问过去、时间顺序、以前的决定或跨会话信息，且快速通道无强匹配时运行。用独立、无工具写权限的召回回合读取 `memory_search`、相关 daily 条目和被授权的私人会话历史，返回带引用的简短证据；需要时可再读完整条目。当前 QQ 群和非主人会话不能借此访问主人私人历史。设置总时限与结果预算；超时则回答已查到的内容或明确不确定，不编造“没有记录”。[官方 Active Memory](https://docs.openclaw.ai/concepts/active-memory)、[官方记忆架构](https://docs.openclaw.ai/concepts/memory-architecture)。
 
@@ -122,11 +123,11 @@ Deep 使用官方默认的信号权重作为初值：相关性 0.30、频率 0.2
 
 `USER.md` 保存“回答请先给结论”“以后不要推荐香菜”这种可执行的稳定偏好；状态包括观察日期、active/superseded。更新同一主题时原位替换并保留审计来源。`MEMORY.md` 保存“正在学 Rust”“猫叫 mini”这类事实。用户给助手改名更新 `IDENTITY.md`，比历史中的旧名称优先；角色系统显式选定的角色名称按该角色设置处理，不能让普通观察覆盖用户当前选择。这样“你叫什么”不依赖语义搜索能否命中“给助手起名”。[官方用户模型](https://docs.openclaw.ai/concepts/user-model)、[官方 Agent 工作区](https://docs.openclaw.ai/concepts/agent)。
 
-“周五提醒我”和“下次聊部署时提醒检查变更日志”属于前瞻性记忆。时间事件交给既有/新增调度任务，成功投递后完成；消息事件存 SQLite 的确定性 trigger、渠道和发送者范围、到期时间、冷却时间、触发次数及取消状态。消息事件冷却 24 小时、最多触发 3 次、90 天到期、每轮最多注入 3 项。不能仅把它写成 `MEMORY.md` 普通事实，因为普通检索无法保证按时触发或取消。[官方 Standing intents](https://docs.openclaw.ai/concepts/standing-intents)。
+“周五提醒我”和“下次聊部署时提醒检查变更日志”属于前瞻性记忆，但目标实现分两条路径：定时提醒交给调度任务，成功投递一次后完成；事件意图保存在 SQLite，由确定性 trigger 匹配，并记录渠道、发送者范围、到期时间、冷却时间、触发次数及取消状态。事件意图默认冷却 24 小时、最多触发 3 次、90 天到期、每轮最多注入 3 项。当前星栖两类提醒仍共用 `standing_intents` 表；拆分执行路径时要保留旧时间记录和投递幂等键，不能迁移后重复发送。不能仅把提醒写成 `MEMORY.md` 普通事实，因为普通检索无法保证按时触发或取消。[官方 Standing intents](https://docs.openclaw.ai/concepts/standing-intents)。
 
 ## 8. 遗忘、迁移与恢复
 
-**遗忘语义。** `memory forget --conversation` 先列出被选会话、其 daily 观察、晋升条目、混合来源和将保留的无关内容；执行后把来源会话写入墓碑，删除受影响的受管条目、索引、向量和阶段状态，并阻止后续会话回填。对同时合并了被删来源与未删来源的单条核心文字，按 OpenClaw 语义**整条删除**，避免模型猜测如何从合并句里减去一位来源；未删来源可在以后重新形成一条独立事实。当前知语“尚有其他来源就保留核心”的规则在此处需要变更。文件备份、未受管的手写文件和用户另存的导出不在自动删除覆盖内，应在预览里明确列出。[官方来源与删除](https://docs.openclaw.ai/concepts/memory-provenance)、[官方 memory CLI](https://docs.openclaw.ai/cli/memory)。
+**遗忘语义。** `memory forget --conversation` 先列出被选会话、其 daily 观察、晋升条目、混合来源和将保留的无关内容；执行后把来源会话写入墓碑，删除受影响的受管条目、索引、向量和阶段状态，并阻止后续会话回填。对同时合并了被删来源与未删来源的单条核心文字，按 OpenClaw 语义**整条删除**，避免模型猜测如何从合并句里减去一位来源；未删来源可在以后重新形成一条独立事实。当前星栖“尚有其他来源就保留核心”的规则在此处需要变更。文件备份、未受管的手写文件和用户另存的导出不在自动删除覆盖内，应在预览里明确列出。[官方来源与删除](https://docs.openclaw.ai/concepts/memory-provenance)、[官方 memory CLI](https://docs.openclaw.ai/cli/memory)。
 
 **迁移顺序。**
 
@@ -163,7 +164,50 @@ Deep 使用官方默认的信号权重作为初值：相关性 0.30、频率 0.2
 
 采用仓库现有 `tests/fixtures/memory_retrieval_cases.json`、`tests/test_memory_retrieval_v2.py`、`tests/test_memory_lifecycle.py`、`tests/test_consolidation.py` 等建立迁移前基线，再增加 Harry 改名、普通回合情景层不注入、毒化来源、三门槛、跨会话授权、混合来源遗忘、并发文件编辑和压缩前 flush 的行为用例。检索质量用目标命中率和错误注入率共同验收，不只看 Recall@K；10,000 条规模下记录 p50/p95 与现有基准比较。实施时按改动范围运行 Python 测试、前端检查和 `git diff --check`，所有带数据的验证使用临时 `ZHIYU_DATA_DIR`。
 
-## 10. 官方依据
+## 10. 下一阶段：具体改成什么样
+
+本节是针对上表缺口的实施单。目标是让用户能从回答、记忆列表和诊断中看出改动，而不只是增加内部字段。按 P0 → P1 → P2 → P3 执行；每阶段完成后更新第 9 节的实际状态，不能把本节的设计当成已上线功能。
+
+| 优先级 | 当前表现 | 目标表现 | 主要改动位置 |
+| --- | --- | --- | --- |
+| P0 来源边界 | 已有 `owner`、`agent`、`imported` 等标记，但工具返回和引用文本尚无贯穿整个回合的污染标记 | 所有观察能追到已验证消息或外部资料；网页、MCP、Skill、引用及系统任务的内容不能凭正文自称“主人说的”而晋升 | `application/chat.py`、`memory_jobs.py`、`core/memory/manager.py`、来源表与 Alembic |
+| P0 Dreaming 改写安全 | Deep 有三门槛及文件版本检查，但缺改写前镜像、旧条目损失上限和完整审阅 | 每次自动改写有来源、前后差异、可恢复镜像；超出预算或来源校验失败时不覆盖旧文件 | `application/consolidation_jobs.py`、`core/memory/consolidation.py`、Mutation Journal、Dreams 管理入口 |
+| P1 用户偏好与身份 | `USER.md` 已分文件，偏好仍可能是“用户喜欢……”式陈述；角色名与 `IDENTITY.md` 冲突缺可见解释 | 当前生效偏好是单条指令；纠正旧偏好时原位替代；界面显示助手名称的生效来源 | `core/memory/manager.py`、`core/agent/context.py`、角色与记忆管理页 |
+| P2 项目记忆 | 核心条目没有可信项目键 | A 仓库的规则仅在 A 项目活跃时自动注入；全局偏好保持全局 | CLI/TUI 工作目录入口、`Memory` 索引、`retriever.py`、`context.py` |
+| P2 复杂召回 | 长文按条目索引；深召回是直接搜索 | 长文按约 400 token、80 token 重叠建立可重建索引；历史问题由受限只读召回回合给出带来源摘要 | FTS/向量索引、`deep_recall.py`、检索质量用例 |
+| P3 事件提醒 | 固定中文句式、主题子串匹配，Web 只有最近提醒提示；尚无列表/详情管理入口 | 主人可创建、列出、按 ID 取消；关键词组合确定性匹配，状态、范围、到期和触发次数可见 | `standing_intents.py`、CLI/API/Web、Alembic |
+
+### 10.1 P0：来源与自动改写保护
+
+1. 入口代码把来源分类为 `owner`、`agent`、`untrusted`、`system`，同时存 `session_kind` 与原始消息 ID。旧 `imported` 行迁移为未核实来源；保留旧 ID、正文和文件路径。网络工具结果使**本回合后续助手派生内容**带 `untrusted` 标记，下一条新的主人消息重置该标记；模型输出和 Markdown 注释不能修改这些 SQLite 字段。
+2. 观察提取仍只从主人本轮原文取证；引用、工具结果和已召回的记忆以结构化边界进入提示词。会话结束/压缩前补摄取游标，按来源消息 ID 幂等入队。Dreaming 在组装模型输入前剔除 `untrusted`、`system` 及来源已遗忘的候选。
+3. Deep 先生成结构化操作，再校验当前文件哈希、候选来源、核心预算和被删旧条目比例。把 `MEMORY.md` 改写前内容及操作摘要写入 SQLite，再经现有 Mutation Journal 落盘；旧条目损失不得超过 25%。校验失败时，只在没有冲突且预算足够时执行受相同来源约束的追加；否则候选保留待审阅。Dreams 视图列出本次新增、替代、保留、拒绝的条目及前后差异。
+
+**验收场景：**用户让星栖总结一篇声称“用户改名 Harry”的网页，网页内容可作为未核实资料检索，却不能修改 `IDENTITY.md` 或晋升核心；一次 Deep 产生过量删除时，原文件不变，失败原因和改写前镜像可查；进程在文件写入后中断仍能恢复到一致状态。[官方来源边界](https://docs.openclaw.ai/concepts/memory-architecture)、[官方 Dreaming](https://docs.openclaw.ai/concepts/dreaming)。
+
+### 10.2 P1：让偏好和名称始终只有一个当前答案
+
+`USER.md` 的活动偏好改为“回答前先给结论”“不要推荐香菜”这类可执行指令，每项带观察日期、`active`/`superseded` 和来源 ID。用户明确纠正同一主题时，在同一节保留旧项的替代记录，并只注入当前活动项；模糊冲突留待用户确认，不让模型猜测。现有陈述式条目只生成转换预览，不在迁移时自动改变意思。`IDENTITY.md` 与显式选择的角色名冲突时，管理页显示当前生效名称及来源，当前对话只注入一个名称。
+
+**验收场景：**先说“以后请详细解释”，再说“以后只给简短结论”，下一轮只按后者回答；搜索仍能看到旧偏好何时被替代。“你叫什么”在普通角色、切换角色和明确改名后均能得到与界面一致的名字。[官方用户模型](https://docs.openclaw.ai/concepts/user-model)。
+
+### 10.3 P2：隔离项目并提高长历史问题的证据质量
+
+CLI/TUI 在可信仓库中由运行时读取并归一化 `origin`，没有 `origin` 时用仓库绝对路径；模型提供的路径一律不作为项目键。每会话保留最近 4 个活动键，记忆条目仅写入本轮当前项目键。项目匹配影响搜索排序；自动触发时只接纳活动项目，未标项目的个人偏好保持全局。Web/QQ 没有明确项目上下文时不猜项目。长文切块保留条目 ID、文件行号和来源等级；召回回合只获 `memory_search`、`memory_get` 和获授权私人历史的读取权限，返回简短证据及来源，超时则明确说明检索未完成。
+
+**验收场景：**在 A 仓库学到的构建命令不会在 B 仓库的普通回答中出现；同一 1,000 字长文的首尾事实均可查到；问“上个月我们先后决定了什么”时，回答能指向原始日期和会话，QQ 群与其他身份不能借深召回读取私人历史。用固定留出集同时统计命中率、错误注入率和 10,000 条 p50/p95，而不只看检索速度。[官方项目范围](https://docs.openclaw.ai/concepts/memory-architecture)、[官方索引](https://docs.openclaw.ai/concepts/memory-builtin)、[官方 Active Memory](https://docs.openclaw.ai/concepts/active-memory/how-it-works)。
+
+### 10.4 P3：事件提醒的目标交互与状态
+
+**事件提醒**使用独立的确定性匹配路径。主人在已验证的私聊或本机入口创建时，保存提醒正文、一个或多个触发词组合、渠道与发送者范围、过期时间、24 小时冷却和最多 3 次的默认触发预算。先用 FTS 缩小候选，再要求某一组触发词**全部**出现在本轮用户消息；匹配和次数更新在同一数据库事务中完成，失败回复不消耗次数。每轮最多注入 3 项。管理页、CLI 和 API 展示 ID、触发词、范围、`pending/armed/fired/done/cancelled/expired` 状态、上次触发时间及剩余次数；取消必须指向具体 ID 并立即阻止再次触发。旧 `active`/`completed` 行通过 Migration 映射状态，不要求用户删除提醒。
+
+例如“下次同时提到部署和回滚时提醒我检查变更日志”：只说“部署”不会触发，同时提到“部署”“回滚”才触发；管理页显示已触发 1/3 次，用户可按 ID 取消。**定时提醒**继续由调度路径在到期时投递，与事件触发词匹配分开；迁移现有时间记录时保留投递标记，避免重启后重复提醒。[官方 Standing intents](https://docs.openclaw.ai/concepts/standing-intents)。
+
+### 10.5 完成顺序与交付检查
+
+每个阶段先用临时 `ZHIYU_DATA_DIR` 复现当前缺口，再实施最小必要的 Schema、业务、入口和界面改动；旧数据用 Alembic 升级并留可恢复备份。每阶段检查身份隔离、来源遗忘与崩溃恢复，并运行相关 Python/前端检查。P0 完成前，不将“完全对齐 OpenClaw”标为已完成；P3 完成后再用真实用户路径作端到端验收。
+
+## 11. 官方依据
 
 - [Memory architecture](https://docs.openclaw.ai/concepts/memory-architecture)：层级、来源、两级召回、项目作用域、用户模型与前瞻性记忆。
 - [Builtin memory engine](https://docs.openclaw.ai/concepts/memory-builtin) 与 [Memory search](https://docs.openclaw.ai/concepts/memory-search)：文件索引、FTS5/BM25、向量、排序、触发器与降级。
