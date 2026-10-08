@@ -10,7 +10,7 @@ from zhiyu.infrastructure.database.repositories.identity_repository import Ident
 from zhiyu.infrastructure.database.repositories.memory_repository import MemoryRepository
 from zhiyu.core.memory.mutations import FileMutationManager
 from zhiyu.core.memory.retriever import derive_trigger_text
-from zhiyu.core.memory.store import CORE_FILE, USER_FILE, MemoryStore
+from zhiyu.core.memory.store import CORE_FILE, IDENTITY_FILE, USER_FILE, MemoryStore
 from zhiyu.core.memory.index_common import _entries_with_keys, _save_file_index
 
 
@@ -54,7 +54,7 @@ def sync_changed_index(
     for relative, path in changed:
         keyed_entries = _entries_with_keys(store, path)
         entries = {key: entry for key, entry in keyed_entries}
-        tier = "core" if path.name in (USER_FILE, CORE_FILE) else "episodic"
+        tier = "core" if path.name in (IDENTITY_FILE, USER_FILE, CORE_FILE) else "episodic"
         rows = db.scalars(
             select(Memory).where(
                 Memory.identity_id == identity_id, Memory.file_path == relative
@@ -71,7 +71,7 @@ def sync_changed_index(
                     identity_id=identity_id,
                     origin="manual" if tier == "core" else "automatic",
                     tier=tier,
-                    trust="owner" if tier == "core" else "agent",
+                    trust="imported",
                     source_kind="import",
                     trigger_text=(derive_trigger_text(entry.content) if tier == "core" else None),
                     promotion_status="none" if tier == "core" else "pending",

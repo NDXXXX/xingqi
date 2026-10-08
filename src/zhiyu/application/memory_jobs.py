@@ -8,7 +8,7 @@ from zhiyu.core.memory.indexer import sync_changed_index
 from zhiyu.core.memory.manager import MemoryManager
 from zhiyu.core.providers.router import ProviderRouter, provider_router
 from zhiyu.infrastructure.database.db import SessionLocal
-from zhiyu.infrastructure.database.models import Message
+from zhiyu.infrastructure.database.models import Conversation, Message
 from zhiyu.infrastructure.database.repositories.memory_job_repository import MemoryJobRepository
 from zhiyu.infrastructure.database.repositories.memory_repository import MemoryRepository
 from zhiyu.infrastructure.database.repositories.message_repository import MessageRepository
@@ -118,6 +118,17 @@ class MemoryJobProcessor:
                 logger.warning("memory consolidation scheduling failed: %s", exc)
         return result
 
+    async def process_conversation(self, conversation_id: str) -> None:
+        """在会话压缩前尝试完成该会话已持久化的观察任务。"""
+        with self.session_factory() as db:
+            pending_ids = [
+                job.id for job in self.jobs.list_by_status(db, "pending")
+                if (message := db.get(Message, job.user_message_id)) is not None
+                and message.conversation_id == conversation_id
+            ]
+        for job_id in pending_ids:
+            await self._process_one(job_id)
+
     async def _process_one(self, job_id: str) -> str:
         with self.session_factory() as db:
             job = self.jobs.claim(db, job_id)
@@ -130,6 +141,13 @@ class MemoryJobProcessor:
                 self.jobs.finish(db, job, "cancelled")
                 return "cancelled"
             if is_forgotten(db, user.conversation_id, job.identity_id):
+                self.jobs.finish(db, job, "cancelled")
+                return "cancelled"
+            conversation = db.get(Conversation, user.conversation_id)
+            if conversation is None or not (
+                conversation.channel == "local"
+                or (conversation.channel == "qq" and conversation.external_conversation_type == "private")
+            ):
                 self.jobs.finish(db, job, "cancelled")
                 return "cancelled"
             messages = MessageRepository().list_by_conversation(db, user.conversation_id)

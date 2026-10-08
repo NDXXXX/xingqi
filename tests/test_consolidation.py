@@ -3,6 +3,7 @@
 import asyncio
 import json
 from datetime import timedelta
+from uuid import uuid4
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -19,7 +20,7 @@ from zhiyu.infrastructure.database.repositories.conversation_repository import C
 from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository
 from zhiyu.infrastructure.database.repositories.memory_repository import MemoryRepository
 from zhiyu.infrastructure.database.repositories.provider_repository import ProviderRepository
-from zhiyu.infrastructure.database.models import utcnow
+from zhiyu.infrastructure.database.models import MemoryRecallEvent, utcnow
 from zhiyu.core.memory.freshness import needs_confirmation
 
 
@@ -31,7 +32,9 @@ def _database():
     return sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
-def _candidate(db, identity_id, type, content):
+def _candidate(db, store, identity_id, type, content):
+    path = store.daily_path(identity_id=identity_id)
+    entry = store.append(path, content, meta={"type": type})
     return MemoryRepository().create(
         db,
         type=type,
@@ -41,11 +44,16 @@ def _candidate(db, identity_id, type, content):
         trust="agent",
         source_kind="message",
         promotion_status="pending",
+        file_path=store.relative_path(path),
+        line_start=entry.line_start,
+        line_end=entry.line_end,
+        content_hash=entry.hash,
+        entry_key=entry.id,
     )
 
 
 def _core(db, store, identity_id, type, content):
-    path = store.path_for(type, identity_id)
+    path = store.core_path_for(identity_id)
     entry = store.append(path, content, meta={"type": type})
     return MemoryRepository().create(
         db,
@@ -86,8 +94,8 @@ def test_apply_promotes_candidates_to_core(tmp_path):
     store = MemoryStore(tmp_path)
     with factory() as db:
         identity_id = IdentityRepository().local(db).id
-        a = _candidate(db, identity_id, "preference", "下午不再喝咖啡")
-        b = _candidate(db, identity_id, "preference", "以后别推荐咖啡")
+        a = _candidate(db, store, identity_id, "preference", "下午不再喝咖啡")
+        b = _candidate(db, store, identity_id, "preference", "以后别推荐咖啡")
         db.commit()
 
         stats = apply_consolidation(
@@ -115,7 +123,7 @@ def test_apply_promotes_candidates_to_core(tmp_path):
             fresh = MemoryRepository().get(db, candidate.id)
             assert fresh.promotion_status == "promoted"
             assert fresh.promoted_to_id == cores[0].id
-        assert "不向用户推荐咖啡" in store.user_path_for(identity_id).read_text(
+        assert "不向用户推荐咖啡" in store.core_path_for(identity_id).read_text(
             encoding="utf-8"
         )
 
@@ -126,7 +134,7 @@ def test_apply_supersedes_old_core(tmp_path):
     with factory() as db:
         identity_id = IdentityRepository().local(db).id
         old = _core(db, store, identity_id, "preference", "用户喜欢咖啡")
-        candidate = _candidate(db, identity_id, "preference", "用户戒咖啡了")
+        candidate = _candidate(db, store, identity_id, "preference", "用户戒咖啡了")
         db.commit()
 
         stats = apply_consolidation(
@@ -147,7 +155,7 @@ def test_apply_supersedes_old_core(tmp_path):
 
         assert stats["superseded_count"] == 1
         assert MemoryRepository().get(db, old.id).status == "superseded"
-        text = store.user_path_for(identity_id).read_text(encoding="utf-8")
+        text = store.core_path_for(identity_id).read_text(encoding="utf-8")
         assert "用户喜欢咖啡" not in text
         assert "用户已戒咖啡" in text
 
@@ -157,7 +165,7 @@ def test_goal_promotion_preserves_last_evidence_time(tmp_path):
     store = MemoryStore(tmp_path)
     with factory() as db:
         identity_id = IdentityRepository().local(db).id
-        candidate = _candidate(db, identity_id, "goal", "用户准备三个月内学会 Rust")
+        candidate = _candidate(db, store, identity_id, "goal", "用户准备三个月内学会 Rust")
         candidate.observed_at = utcnow() - timedelta(days=100)
         db.flush()
         stats = apply_consolidation(
@@ -177,7 +185,7 @@ def test_apply_ignores_candidates(tmp_path):
     store = MemoryStore(tmp_path)
     with factory() as db:
         identity_id = IdentityRepository().local(db).id
-        candidate = _candidate(db, identity_id, "fact", "今天聊了天气")
+        candidate = _candidate(db, store, identity_id, "fact", "今天聊了天气")
         db.commit()
 
         stats = apply_consolidation(
@@ -212,11 +220,11 @@ def test_new_independent_observation_reopens_deferred_candidate(tmp_path):
             role="user", content="我继续学习 Rust",
         )
         db.add_all([first_message, second_message])
-        deferred = _candidate(db, identity_id, "goal", "用户正在学习 Rust")
+        deferred = _candidate(db, store, identity_id, "goal", "用户正在学习 Rust")
         deferred.promotion_status = "deferred"
         deferred.source_message_id = first_message.id
         deferred.conversation_id = first_conversation.id
-        fresh = _candidate(db, identity_id, "goal", "用户继续学习 Rust")
+        fresh = _candidate(db, store, identity_id, "goal", "用户继续学习 Rust")
         fresh.source_message_id = second_message.id
         fresh.conversation_id = second_conversation.id
         db.flush()
@@ -267,7 +275,7 @@ def test_threshold_not_met_for_few_fresh_candidates():
     assert ConsolidationProcessor._threshold_met(candidates) is False
 
 
-def test_eligibility_requires_owner_recall_or_independent_repetition(tmp_path):
+def test_eligibility_requires_score_recall_count_and_distinct_queries(tmp_path):
     factory = _database()
     store = MemoryStore(tmp_path)
     processor = ConsolidationProcessor(factory, store)
@@ -276,7 +284,7 @@ def test_eligibility_requires_owner_recall_or_independent_repetition(tmp_path):
         first_conversation = ConversationRepository().create(
             db, title="first", channel="local", identity_id=identity_id
         )
-        first = _candidate(db, identity_id, "preference", "用户不喝咖啡")
+        first = _candidate(db, store, identity_id, "preference", "用户不喝咖啡")
         first.conversation_id = first_conversation.id
         path = store.daily_path(identity_id=identity_id)
         first_entry = store.append(path, first.content, meta={"type": first.type})
@@ -290,7 +298,7 @@ def test_eligibility_requires_owner_recall_or_independent_repetition(tmp_path):
         second_conversation = ConversationRepository().create(
             db, title="second", channel="local", identity_id=identity_id
         )
-        second = _candidate(db, identity_id, "preference", "用户不喝含咖啡因饮品")
+        second = _candidate(db, store, identity_id, "preference", "用户不喝含咖啡因饮品")
         second.conversation_id = second_conversation.id
         second_entry = store.append(path, second.content, meta={"type": second.type})
         second.file_path = store.relative_path(path)
@@ -298,10 +306,15 @@ def test_eligibility_requires_owner_recall_or_independent_repetition(tmp_path):
         second.content_hash = second_entry.hash
         db.commit()
 
-        assert {item.id for item in processor._eligible(db, identity_id, [first, second])} == {
-            first.id,
-            second.id,
-        }
+        assert processor._eligible(db, identity_id, [first, second]) == []
+        for query_hash in ("one", "two", "three"):
+            db.add(MemoryRecallEvent(
+                id=str(uuid4()), memory_id=first.id, identity_id=identity_id,
+                query_hash=query_hash, score=1.0, recall_mode="deep",
+            ))
+        db.flush()
+        assert [item.id for item in processor._eligible(db, identity_id, [first, second])] == [first.id]
+        assert processor._promotion_score(db, identity_id, first, [first, second])["score"] >= 0.75
 
 
 def test_run_sweep_promotes_end_to_end(tmp_path, monkeypatch):
@@ -312,14 +325,23 @@ def test_run_sweep_promotes_end_to_end(tmp_path, monkeypatch):
             db, name="Fake", provider_type="openai", api_key_ref="env:FAKE_KEY"
         )
         identity_id = IdentityRepository().local(db).id
-        candidate = _candidate(db, identity_id, "preference", "下午不再喝咖啡")
+        conversation = ConversationRepository().create(
+            db, title="source", channel="local", identity_id=identity_id
+        )
+        candidate = _candidate(db, store, identity_id, "preference", "下午不再喝咖啡")
         path = store.daily_path(identity_id=identity_id)
         entry = store.append(path, candidate.content, meta={"type": candidate.type})
         candidate.trust = "owner"
+        candidate.conversation_id = conversation.id
         candidate.file_path = store.relative_path(path)
         candidate.entry_key = entry.id
         candidate.content_hash = entry.hash
         candidate_id = candidate.id
+        for query_hash in ("one", "two", "three"):
+            db.add(MemoryRecallEvent(
+                id=str(uuid4()), memory_id=candidate.id, identity_id=identity_id,
+                query_hash=query_hash, score=1.0, recall_mode="deep",
+            ))
         db.commit()
 
     class FakeClient(AIProvider):

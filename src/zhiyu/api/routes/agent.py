@@ -9,6 +9,8 @@ from zhiyu.api.schemas.agent import ChatBody
 from zhiyu.application.chat import ChatRequest
 from zhiyu.application.conversations import ConversationService
 from zhiyu.application.runtime import RuntimeHost
+from zhiyu.application.standing_intents import StandingIntentService
+from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository
 
 
 def build_agent_router(runtime: RuntimeHost) -> APIRouter:
@@ -52,6 +54,12 @@ def build_agent_router(runtime: RuntimeHost) -> APIRouter:
         if history is None:
             raise HTTPException(status_code=404, detail="会话不存在")
         return history
+
+    @router.get("/api/reminders/recent")
+    async def recent_reminders():
+        with runtime.chat_service.session_factory() as db:
+            identity_id = IdentityRepository().local(db).id
+            return StandingIntentService.recent_local(db, identity_id)
 
     @router.get("/api/runs/{run_id}")
     async def get_run(run_id: str):

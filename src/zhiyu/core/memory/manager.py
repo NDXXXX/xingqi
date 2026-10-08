@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from zhiyu.infrastructure.database.models import (
+    Conversation,
     ForgottenConversation,
     Memory,
     MemorySource,
@@ -21,7 +22,22 @@ from .extractor import extract_observations
 from .mutations import FileMutationManager
 from .retriever import _lexical_similarity, derive_trigger_text
 from .safety import contains_secret
-from .store import MemoryStore
+from .store import IDENTITY_FILE, MemoryStore
+
+_ASSISTANT_NAME_RE = re.compile(
+    r"^\s*(?:(?:以后|从现在起)[，, ]*)?"
+    r"(?:(?:你|助手)(?:以后)?(?:的名字)?(?:就)?(?:叫|叫做|改名为|名字是|名字改成)"
+    r"|(?:我)?给你(?:起名|取名|改名)(?:为|叫|成)?)"
+    r"\s*[“\"']?([\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9._-]{0,31})[”\"']?\s*[。.!！]?\s*$"
+)
+
+
+def extract_assistant_name(message: str) -> str | None:
+    if "?" in message or "？" in message:
+        return None
+    match = _ASSISTANT_NAME_RE.fullmatch(message)
+    name = match.group(1) if match else None
+    return name if name not in {"什么", "啥", "谁", "多少"} else None
 
 
 class MemoryManager:
@@ -29,6 +45,79 @@ class MemoryManager:
         self.repo = MemoryRepository()
         self.store = store or MemoryStore()
         self.mutations = FileMutationManager(self.store)
+        self._identity_bootstrapped: set[str] = set()
+
+    def set_assistant_name(
+        self, db: Session, identity_id: str, name: str, source_message_id: str
+    ) -> None:
+        if self.store.assistant_name(identity_id) == name:
+            return
+        path = self.store.identity_path_for(identity_id)
+        old = next(
+            (entry for entry in reversed(self.store.read_entries(path))
+             if entry.content.startswith("助手名字是 ") and entry.id),
+            None,
+        )
+        content = f"助手名字是 {name}"
+        meta = {"type": "profile"}
+        if old is None:
+            entry, mutation = self.mutations.append(
+                db, identity_id, path, content, meta=meta,
+                context={"source_message_id": source_message_id},
+            )
+        else:
+            entry, mutation = self.mutations.replace(
+                db, identity_id, path, old.id, content, meta=meta,
+                context={"source_message_id": source_message_id},
+            )
+            previous = db.scalars(
+                select(Memory).where(
+                    Memory.identity_id == identity_id,
+                    Memory.file_path == self.store.relative_path(path),
+                    Memory.entry_key == old.id,
+                    Memory.status == "active",
+                )
+            ).first()
+            if previous is not None:
+                self.repo.update(
+                    db, previous, status="superseded", file_path=None,
+                    line_start=None, line_end=None, content_hash=None,
+                )
+        self.repo.create(
+            db, type="profile", content=entry.content, identity_id=identity_id,
+            importance=10, origin="manual", tier="core", trust="owner",
+            source_kind="message", source_message_id=source_message_id,
+            conversation_id=self._conversation_of(db, source_message_id),
+            file_path=self.store.relative_path(path), line_start=entry.line_start,
+            line_end=entry.line_end, content_hash=entry.hash, entry_key=entry.id,
+        )
+        self.mutations.complete(db, mutation)
+        db.commit()
+
+    def bootstrap_assistant_name(self, db: Session, identity_id: str) -> None:
+        if identity_id in self._identity_bootstrapped:
+            return
+        if self.store.assistant_name(identity_id):
+            self._identity_bootstrapped.add(identity_id)
+            return
+        messages = db.scalars(
+            select(Message)
+            .join(Conversation, Message.conversation_id == Conversation.id)
+            .where(
+                Conversation.identity_id == identity_id,
+                Message.role == "user",
+                (Conversation.channel == "local")
+                | ((Conversation.channel == "qq") & (Conversation.external_conversation_type == "private")),
+            )
+            .order_by(Message.created_at.desc(), Message.id.desc())
+        )
+        for message in messages:
+            name = extract_assistant_name(message.content)
+            if name is not None:
+                self.set_assistant_name(db, identity_id, name, message.id)
+                self._identity_bootstrapped.add(identity_id)
+                return
+        self._identity_bootstrapped.add(identity_id)
 
     async def extract_and_save(
         self,
@@ -46,6 +135,8 @@ class MemoryManager:
     ) -> list[Memory]:
         if not identity_id:
             raise ValueError("保存记忆必须指定身份")
+        if extract_assistant_name(user_msg) is not None:
+            return []
 
         observations = await extract_observations(
             provider,
@@ -143,6 +234,7 @@ class MemoryManager:
             for item in self.repo.list_owned(db, identity_id, tier="core")
             if item.status == "active"
             and item.type == observation["type"]
+            and not (item.file_path or "").endswith(IDENTITY_FILE)
             and _lexical_similarity(item.content, observation["content"]) >= 0.28
         ]
         if len(candidates) == 1:
@@ -386,6 +478,7 @@ class MemoryManager:
             for memory in self.repo.list_owned(db, identity_id, tier="core")
             if memory.type == observation["type"]
             and memory.file_path
+            and not memory.file_path.endswith(IDENTITY_FILE)
             and memory.entry_key
             and _lexical_similarity(memory.content, observation["content"]) >= 0.28
         ]

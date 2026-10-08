@@ -1,6 +1,6 @@
 """长期核心巩固：让模型从情景观察中挑选稳定信息，晋升为长期核心记忆。
 
-第一版是单次 sweep（合并 OpenClaw 的 light/REM/deep）：
+Deep 阶段只处理已通过来源与分数门槛的候选：
 - 代码负责候选边界、信任门槛、结构校验、文件写入与生命周期；
 - 模型只负责在受约束的候选内产出 add_core / supersede_core / ignore。
 - 调度层在模型调用前校验召回次数、独立复现、owner 确认与正文版本。
@@ -155,8 +155,8 @@ def apply_consolidation(
         "decisions": [],
     }
 
-    candidates = _load_candidates(db, repo, identity_id, operations)
-    targets = _load_targets(db, repo, identity_id, operations)
+    candidates = _load_candidates(db, repo, store, identity_id, operations)
+    targets = _load_targets(db, repo, store, identity_id, operations)
     if candidates is None or targets is None:
         return stats
 
@@ -242,7 +242,7 @@ def apply_consolidation(
     return stats
 
 
-def _load_candidates(db, repo, identity_id, operations) -> dict[str, Memory] | None:
+def _load_candidates(db, repo, store, identity_id, operations) -> dict[str, Memory] | None:
     referenced: set[str] = set()
     for operation in operations:
         for candidate_id in operation["candidate_ids"]:
@@ -257,13 +257,29 @@ def _load_candidates(db, repo, identity_id, operations) -> dict[str, Memory] | N
             or memory.tier != "episodic"
             or memory.status != "active"
             or memory.promotion_status != "pending"
+            or memory.trust not in {"owner", "agent"}
+            or not memory.file_path
+            or not memory.entry_key
+        ):
+            return None
+        try:
+            path = store.resolve_relative(memory.file_path)
+        except ValueError:
+            return None
+        if not store.is_managed_path(identity_id, path) or path.parent.name != "daily":
+            return None
+        if not any(
+            entry.id == memory.entry_key
+            and entry.content == memory.content
+            and entry.hash == memory.content_hash
+            for entry in store.read_entries(path)
         ):
             return None
         result[candidate_id] = memory
     return result
 
 
-def _load_targets(db, repo, identity_id, operations) -> dict[str, Memory] | None:
+def _load_targets(db, repo, store, identity_id, operations) -> dict[str, Memory] | None:
     result: dict[str, Memory] = {}
     for operation in operations:
         if operation["action"] != "supersede_core":
@@ -275,6 +291,17 @@ def _load_targets(db, repo, identity_id, operations) -> dict[str, Memory] | None
             or memory.tier != "core"
             or memory.status != "active"
             or memory.type != operation["type"]
+            or memory.origin != "automatic"
+            or memory.file_path != store.relative_path(store.core_path_for(identity_id))
+            or not memory.entry_key
+        ):
+            return None
+        path = store.core_path_for(identity_id)
+        if not any(
+            entry.id == memory.entry_key
+            and entry.content == memory.content
+            and entry.hash == memory.content_hash
+            for entry in store.read_entries(path)
         ):
             return None
         result[target_id] = memory
@@ -282,7 +309,7 @@ def _load_targets(db, repo, identity_id, operations) -> dict[str, Memory] | None
 
 
 def _create_core(db, repo, store, mutations, identity_id, operation, candidates):
-    path = store.path_for(operation["type"], identity_id)
+    path = store.core_path_for(identity_id)
     meta = {"type": operation["type"], "importance": str(int(round(operation["importance"])))}
     entry, mutation = mutations.append(
         db,

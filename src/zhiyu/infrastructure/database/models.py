@@ -317,6 +317,36 @@ class MemoryRecallEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class StandingIntent(Base):
+    __tablename__ = "standing_intents"
+    __table_args__ = (
+        Index("ix_standing_intents_due", "status", "due_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    identity_id: Mapped[str] = mapped_column(
+        ForeignKey("identities.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    source_message_id: Mapped[str] = mapped_column(
+        ForeignKey("messages.id", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    source_conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(16))
+    topic: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    content: Mapped[str] = mapped_column(Text)
+    channel: Mapped[str] = mapped_column(String(32))
+    channel_config_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    target_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    due_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    last_fired_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    fire_count: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(16), default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class MemoryMutation(Base):
     __tablename__ = "memory_mutations"
     __table_args__ = (

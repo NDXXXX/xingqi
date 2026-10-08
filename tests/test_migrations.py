@@ -53,7 +53,10 @@ def test_upgrade_preserves_legacy_data(tmp_path):
 
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT title FROM conversations WHERE id='c1'")) == "保留我"
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0020_memory_context_checkpoints"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0022_standing_intents"
+        assert connection.scalar(text(
+            "SELECT memory_id FROM memory_fts WHERE memory_fts MATCH '\"保留这\"'"
+        )) == "m1"
         assert connection.scalar(
             text("SELECT owner_user_id FROM channel_configs WHERE channel='qq'")
         ) is None
@@ -62,6 +65,10 @@ def test_upgrade_preserves_legacy_data(tmp_path):
             "SELECT content, status, origin FROM memories WHERE id='m1'"
         )).one()
         assert tuple(memory) == ("保留这条记忆", "active", "legacy")
+        connection.execute(text("UPDATE memories SET content='新的长期记忆' WHERE id='m1'"))
+        assert connection.scalar(text(
+            "SELECT memory_id FROM memory_fts WHERE memory_fts MATCH '\"新的长\"'"
+        )) == "m1"
     tables = set(inspect(engine).get_table_names())
     assert "app_settings" in tables
     assert {
@@ -99,6 +106,7 @@ def test_upgrade_preserves_legacy_data(tmp_path):
     }
     assert {"memory_sources", "memory_recall_events", "memory_mutations"} <= tables
     assert "memory_file_indexes" in tables
+    assert "standing_intents" in tables
     assert "last_evidence_at" in {
         column["name"] for column in inspect(engine).get_columns("memories")
     }

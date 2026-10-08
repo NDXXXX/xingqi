@@ -87,6 +87,17 @@ async def test_job_completes_and_does_not_duplicate_applied_source():
         assert MemoryJobRepository().get(db, job_id).status == "completed"
 
 
+async def test_conversation_flush_processes_persisted_job():
+    factory, job_id, user_id, _identity_id = _queued_job()
+    with factory() as db:
+        conversation_id = db.get(models.Message, user_id).conversation_id
+    manager = AsyncMock()
+    await MemoryJobProcessor(factory, FakeRouter(), manager).process_conversation(conversation_id)
+    manager.extract_and_save.assert_awaited_once()
+    with factory() as db:
+        assert MemoryJobRepository().get(db, job_id).status == "completed"
+
+
 async def test_failed_job_stops_after_three_attempts_and_can_retry():
     factory, job_id, _user_id, _identity_id = _queued_job()
     manager = AsyncMock()

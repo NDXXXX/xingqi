@@ -94,6 +94,39 @@ async def test_observation_without_user_evidence_is_ignored(tmp_path):
         assert MemoryRepository().list_owned(db, identity_id) == []
 
 
+async def test_forget_conversation_removes_explicit_core(tmp_path):
+    factory = _database()
+    identity_id, source_id, conversation_id = _source(factory, "记住我喜欢简洁回答")
+    store = MemoryStore(tmp_path)
+    with factory() as db:
+        changed = await MemoryManager(store).extract_and_save(
+            db, ObservationProvider([{
+                "type": "preference", "content": "用户喜欢简洁回答",
+                "evidence": "我喜欢简洁回答",
+            }]), "test", "记住我喜欢简洁回答", "", identity_id,
+            user_message_id=source_id,
+        )
+        core_id = changed[0].id
+
+    service = MemoryService(factory, store=store)
+    assert core_id in {item["id"] for item in service.plan_forget(conversation_id=conversation_id)["entries"]}
+    service.forget_conversation(conversation_id)
+    assert service.get(core_id) is None
+
+
+def test_forget_conversation_removes_assistant_name(tmp_path):
+    factory = _database()
+    identity_id, source_id, conversation_id = _source(factory, "你以后叫Harry")
+    store = MemoryStore(tmp_path)
+    with factory() as db:
+        MemoryManager(store).set_assistant_name(db, identity_id, "Harry", source_id)
+    service = MemoryService(factory, store=store)
+    assert store.assistant_name(identity_id) == "Harry"
+    assert any(item["file_path"].endswith("IDENTITY.md") for item in service.plan_forget(conversation_id=conversation_id)["entries"])
+    service.forget_conversation(conversation_id)
+    assert store.assistant_name(identity_id) is None
+
+
 def test_memory_service_edit_complete_and_forget(tmp_path):
     factory = _database()
     store = MemoryStore(tmp_path)
@@ -104,6 +137,7 @@ def test_memory_service_edit_complete_and_forget(tmp_path):
     assert service.get(old.id).status == "superseded"
     assert corrected.supersedes_id == old.id
     assert [item.content for item in service.list()] == ["用户不喝咖啡"]
+    assert [item.id for item in service.search("咖啡")] == [corrected.id]
 
     with factory() as db:
         identity_id = IdentityRepository().local(db).id

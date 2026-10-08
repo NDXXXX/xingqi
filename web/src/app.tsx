@@ -69,6 +69,7 @@ function App() {
   const [conversationTitle, setConversationTitle] = useState("新的对话");
   const [pageRevision, setPageRevision] = useState(0);
   const [pageError, setPageError] = useState("");
+  const [reminderNotices, setReminderNotices] = useState<Item[]>([]);
   const conversationLoadRef = useRef(0);
 
   const refreshOverview = useCallback(async () => {
@@ -143,6 +144,37 @@ function App() {
     onErrorClear: onChatErrorClear,
     onRequestError: reportPageError,
   });
+  useEffect(() => {
+    let active = true;
+    const seen = new Set(
+      (sessionStorage.getItem("zhiyu-seen-reminders") || "")
+        .split("|").filter(Boolean),
+    );
+    const refresh = async () => {
+      const rows = await request<Item[]>("/api/reminders/recent");
+      if (!active) return;
+      const fresh = rows.filter((item) => {
+        const key = `${item.id}:${item.fired_at}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      if (fresh.length) {
+        sessionStorage.setItem(
+          "zhiyu-seen-reminders", Array.from(seen).slice(-100).join("|"),
+        );
+        setReminderNotices((current) => [...fresh, ...current].slice(0, 5));
+      }
+    };
+    void refresh().catch(() => undefined);
+    const timer = window.setInterval(() => {
+      void refresh().catch(() => undefined);
+    }, 5000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, []);
   const openConversation = useCallback(
     async (id: string, title?: string) => {
       closeMobileMenu();
@@ -325,53 +357,55 @@ function App() {
   return (
     <div className="shell">
       <aside className="sidebar">
-        <div className="brand">
-          <span className="brand-mark">知</span>
-          <div>
-            <strong>知语</strong>
-            <small>Personal Agent</small>
+        <div className="sidebar-content">
+          <div className="brand">
+            <span className="brand-mark">知</span>
+            <div>
+              <strong>知语</strong>
+              <small>Personal Agent</small>
+            </div>
+            <button
+              className="mobile-menu"
+              aria-label="折叠菜单"
+              onClick={(event) =>
+                event.currentTarget
+                  .closest(".sidebar")
+                  ?.classList.toggle("menu-open")
+              }
+            >
+              ☰
+            </button>
           </div>
-          <button
-            className="mobile-menu"
-            aria-label="折叠菜单"
-            onClick={(event) =>
-              event.currentTarget
-                .closest(".sidebar")
-                ?.classList.toggle("menu-open")
-            }
-          >
-            ☰
+          <button className="primary wide" onClick={() => void startNewChat()}>
+            新对话
           </button>
-        </div>
-        <button className="primary wide" onClick={() => void startNewChat()}>
-          新对话
-        </button>
-        <nav className="nav" aria-label="主导航">
-          {nav.map((item) => (
-            <button
-              key={item.id}
-              className={`nav-item ${page === item.id ? "active" : ""}`}
-              onClick={() => void navigate(item.id)}
-            >
-              <span>{item.icon}</span>
-              {item.label}
-            </button>
-          ))}
-        </nav>
-        <div className="section-title">最近会话</div>
-        <div className="conversation-list">
-          {conversations.slice(0, 30).map((item) => (
-            <button
-              key={item.id}
-              className={`conversation ${item.id === conversationId ? "active" : ""}`}
-              onClick={() => void openConversation(item.id, item.title)}
-            >
-              {item.title || "未命名会话"}
-            </button>
-          ))}
-          {conversations.length === 0 && (
-            <small className="muted sidebar-empty">暂无会话</small>
-          )}
+          <nav className="nav" aria-label="主导航">
+            {nav.map((item) => (
+              <button
+                key={item.id}
+                className={`nav-item ${page === item.id ? "active" : ""}`}
+                onClick={() => void navigate(item.id)}
+              >
+                <span>{item.icon}</span>
+                {item.label}
+              </button>
+            ))}
+          </nav>
+          <div className="section-title">最近会话</div>
+          <div className="conversation-list">
+            {conversations.slice(0, 30).map((item) => (
+              <button
+                key={item.id}
+                className={`conversation ${item.id === conversationId ? "active" : ""}`}
+                onClick={() => void openConversation(item.id, item.title)}
+              >
+                {item.title || "未命名会话"}
+              </button>
+            ))}
+            {conversations.length === 0 && (
+              <small className="muted sidebar-empty">暂无会话</small>
+            )}
+          </div>
         </div>
         <div className="runtime-card">
           <span
@@ -489,6 +523,27 @@ function App() {
           </>
         )}
       </main>
+      {reminderNotices.length > 0 && (
+        <aside className="reminder-notices" aria-live="polite" aria-label="定时提醒">
+          {reminderNotices.map((item) => (
+            <div className="reminder-notice" key={`${item.id}:${item.fired_at}`}>
+              <strong>知语提醒</strong>
+              <p>{item.content}</p>
+              <div>
+                <button onClick={() => {
+                  setReminderNotices((current) => current.filter((row) => row !== item));
+                  void openConversation(item.conversation_id).catch((error) =>
+                    setPageError(errorText(error))
+                  );
+                }}>查看会话</button>
+                <button onClick={() =>
+                  setReminderNotices((current) => current.filter((row) => row !== item))
+                }>关闭</button>
+              </div>
+            </div>
+          ))}
+        </aside>
+      )}
     </div>
   );
 }

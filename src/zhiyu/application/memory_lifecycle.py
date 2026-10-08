@@ -10,7 +10,7 @@ from zhiyu.core.memory.extractor import MEMORY_TYPES
 from zhiyu.core.memory.retriever import derive_trigger_text
 from zhiyu.core.memory.safety import contains_secret
 from zhiyu.core.providers.embedding import embed_and_store
-from zhiyu.infrastructure.database.models import Conversation, ForgottenConversation, Memory, MemorySource, utcnow
+from zhiyu.infrastructure.database.models import Conversation, ForgottenConversation, Memory, MemorySource, StandingIntent, utcnow
 from zhiyu.application.memory_shared import MemoryOperations, MemorySummary, _summary
 
 
@@ -228,12 +228,12 @@ class MemoryLifecycleService(MemoryOperations):
                     )
                 )
             )
-            orphaned_cores = self._orphaned_cores_after_removal(
-                db, identity_id, source_rows
+            affected_cores = self._affected_cores_after_removal(
+                db, identity_id, source_rows, memory.promoted_to_id
             )
-            cascade_core_ids = [core.id for core in orphaned_cores]
+            cascade_core_ids = [core.id for core in affected_cores]
             mutations = []
-            for target in [memory, *orphaned_cores]:
+            for target in [memory, *affected_cores]:
                 mutation = self._remove_from_file(
                     db,
                     identity_id,
@@ -248,7 +248,7 @@ class MemoryLifecycleService(MemoryOperations):
             for source in source_rows:
                 db.delete(source)
             self.memories.delete_owned(db, identity_id, memory.id)
-            for core in orphaned_cores:
+            for core in affected_cores:
                 self.memories.delete_owned(db, identity_id, core.id)
             for mutation in mutations:
                 self.mutations.complete(db, mutation)
@@ -277,8 +277,8 @@ class MemoryLifecycleService(MemoryOperations):
                         )
                     )
                 )
-                orphaned_cores = self._orphaned_cores_after_removal(
-                    db, identity_id, source_rows
+                affected_cores = self._affected_cores_after_removal(
+                    db, identity_id, source_rows, memory.promoted_to_id
                 )
                 return {
                     "kind": "memory",
@@ -300,7 +300,7 @@ class MemoryLifecycleService(MemoryOperations):
                             "file_path": core.file_path,
                             "action": "delete",
                         }
-                        for core in orphaned_cores
+                        for core in affected_cores
                 ],
             }
 
@@ -324,6 +324,12 @@ class MemoryLifecycleService(MemoryOperations):
             )
             core_ids = {item.promoted_to_id for item in episodic if item.promoted_to_id}
             core_ids.update(row.memory_id for row in source_rows)
+            core_ids.update(
+                item.id for item in self.memories.list_owned(
+                    db, identity_id, tier="core", statuses=("active",)
+                )
+                if item.conversation_id == conversation_id and item.source_message_id
+            )
             entries = [
                 {
                     "id": item.id,
@@ -338,27 +344,7 @@ class MemoryLifecycleService(MemoryOperations):
                 core = self.memories.get_owned(db, identity_id, core_id)
                 if core is None:
                     continue
-                remaining_source = any(
-                    source_conversation_id != conversation_id
-                    for source_conversation_id in db.scalars(
-                        select(MemorySource.conversation_id).where(
-                            MemorySource.identity_id == identity_id,
-                            MemorySource.memory_id == core_id,
-                        )
-                    )
-                )
-                legacy_remaining = any(
-                    item.promoted_to_id == core_id
-                    and item.conversation_id != conversation_id
-                    for item in self.memories.list_owned(
-                        db, identity_id, tier="episodic", statuses=None
-                    )
-                )
-                delete = (
-                    core.origin == "automatic"
-                    and not remaining_source
-                    and not legacy_remaining
-                )
+                delete = self._delete_with_conversation(core, conversation_id, source_rows)
                 entries.append(
                     {
                         "id": core.id,
@@ -373,6 +359,13 @@ class MemoryLifecycleService(MemoryOperations):
                 "identity_id": identity_id,
                 "conversation_id": conversation_id,
                 "entries": entries,
+                "intents": [
+                    {"id": item.id, "content": item.content, "action": "delete"}
+                    for item in db.scalars(select(StandingIntent).where(
+                        StandingIntent.identity_id == identity_id,
+                        StandingIntent.source_conversation_id == conversation_id,
+                    ))
+                ],
                 "tombstone": True,
             }
 
@@ -402,28 +395,16 @@ class MemoryLifecycleService(MemoryOperations):
                 )
             )
             promoted_ids.update(row.memory_id for row in source_rows)
+            promoted_ids.update(
+                item.id for item in self.memories.list_owned(
+                    db, identity_id, tier="core", statuses=("active",)
+                )
+                if item.conversation_id == conversation_id and item.source_message_id
+            )
             cores_to_delete = []
             for core_id in promoted_ids:
-                remaining_source = any(
-                    source_conversation_id != conversation_id
-                    for source_conversation_id in db.scalars(
-                        select(MemorySource.conversation_id).where(
-                            MemorySource.identity_id == identity_id,
-                            MemorySource.memory_id == core_id,
-                        )
-                    )
-                )
-                legacy_remaining = any(
-                    item.promoted_to_id == core_id
-                    and item.conversation_id != conversation_id
-                    for item in self.memories.list_owned(
-                        db, identity_id, tier="episodic", statuses=None
-                    )
-                )
-                if remaining_source or legacy_remaining:
-                    continue
                 core = self.memories.get_owned(db, identity_id, core_id)
-                if core is not None and core.origin == "automatic":
+                if core is not None and self._delete_with_conversation(core, conversation_id, source_rows):
                     cores_to_delete.append(core)
 
             # 先完成全部可恢复文件操作，再改变来源图和业务行；mutation
@@ -451,6 +432,11 @@ class MemoryLifecycleService(MemoryOperations):
                 self.memories.delete_owned(db, identity_id, memory.id)
             for core in cores_to_delete:
                 self.memories.delete_owned(db, identity_id, core.id)
+            for item in db.scalars(select(StandingIntent).where(
+                StandingIntent.identity_id == identity_id,
+                StandingIntent.source_conversation_id == conversation_id,
+            )).all():
+                db.delete(item)
             exists = db.query(ForgottenConversation).filter_by(
                 identity_id=identity_id, conversation_id=conversation_id
             ).first()
@@ -557,26 +543,35 @@ class MemoryLifecycleService(MemoryOperations):
             self.store.remove(path, index)
         return None
 
-    def _orphaned_cores_after_removal(
-        self, db, identity_id: str, removing: list[MemorySource]
+    def _affected_cores_after_removal(
+        self, db, identity_id: str, removing: list[MemorySource],
+        legacy_core_id: str | None = None,
     ) -> list[Memory]:
-        removing_ids = {source.id for source in removing}
         core_ids = {source.memory_id for source in removing}
-        orphaned = []
+        if legacy_core_id:
+            core_ids.add(legacy_core_id)
+        affected = []
         for core_id in core_ids:
-            remaining = any(
-                source.id not in removing_ids
-                for source in db.scalars(
-                    select(MemorySource).where(
-                        MemorySource.identity_id == identity_id,
-                        MemorySource.memory_id == core_id,
-                    )
-                )
-            )
             core = self.memories.get_owned(db, identity_id, core_id)
-            if not remaining and core is not None and core.origin == "automatic":
-                orphaned.append(core)
-        return orphaned
+            if core is not None and (
+                core.origin == "automatic"
+                or any(row.memory_id == core_id and row.source_kind == "manual" for row in removing)
+            ):
+                affected.append(core)
+        return affected
+
+    @staticmethod
+    def _delete_with_conversation(
+        core: Memory, conversation_id: str, source_rows: list[MemorySource]
+    ) -> bool:
+        return (
+            core.origin == "automatic"
+            or (core.conversation_id == conversation_id and core.source_message_id is not None)
+            or any(
+                row.memory_id == core.id and row.source_kind == "manual"
+                for row in source_rows
+            )
+        )
 
     @staticmethod
     def _validate(type: str, content: str) -> tuple[str, str]:

@@ -20,6 +20,7 @@ from zhiyu.infrastructure.database.repositories.character_repository import Char
 from zhiyu.infrastructure.database.repositories.conversation_repository import ConversationRepository
 from zhiyu.infrastructure.database.repositories.memory_repository import MemoryRepository
 from zhiyu.core.memory.freshness import needs_confirmation
+from zhiyu.core.memory.store import MemoryStore
 from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository
 from zhiyu.integrations.skills.registry import SkillRegistry
 
@@ -93,6 +94,22 @@ def test_with_agent_context_injects_character_and_memory():
     assert messages[0]["role"] == "system"
     assert "Luna" in messages[0]["content"]
     assert "用户喜欢咖啡" in messages[0]["content"]
+    db.close()
+
+
+def test_assistant_name_comes_from_identity_file(tmp_path):
+    db = _session()
+    identity = IdentityRepository().local(db)
+    conversation = ConversationRepository().create(
+        db, title="name", channel="local", identity_id=identity.id
+    )
+    store = MemoryStore(tmp_path)
+    store.append(store.identity_path_for(identity.id), "助手名字是 Harry", meta={"type": "profile"})
+    messages = with_agent_context(
+        db, conversation, "你叫什么", [{"role": "user", "content": "你叫什么"}],
+        memory_store=store,
+    )
+    assert "你的名字是“Harry”" in messages[0]["content"]
     db.close()
 
 

@@ -14,12 +14,13 @@ from zhiyu.infrastructure.database.models import (
     MemoryFileIndex,
     MemoryMutation,
     MemorySource,
+    StandingIntent,
 )
 from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository
 from zhiyu.infrastructure.database.repositories.memory_repository import MemoryRepository
 from zhiyu.core.memory.mutations import FileMutationManager
 from zhiyu.core.memory.retriever import derive_trigger_text
-from zhiyu.core.memory.store import CORE_FILE, USER_FILE, MemoryStore
+from zhiyu.core.memory.store import CORE_FILE, IDENTITY_FILE, USER_FILE, MemoryStore
 from zhiyu.core.memory.index_common import _entries_with_keys, _save_file_index
 
 
@@ -163,7 +164,7 @@ def rebuild_index(
         keyed_entries = _entries_with_keys(store, path)
         live_keys = {key for key, _ in keyed_entries}
         file_name = path.name
-        tier = "core" if file_name in (USER_FILE, CORE_FILE) else "episodic"
+        tier = "core" if file_name in (IDENTITY_FILE, USER_FILE, CORE_FILE) else "episodic"
 
         rows = db.scalars(
             select(Memory).where(
@@ -190,7 +191,7 @@ def rebuild_index(
                     trust=_choice(
                         context.get("trust"),
                         {"owner", "agent", "imported"},
-                        "owner" if tier == "core" else "agent",
+                        "imported",
                     ),
                     source_kind=_choice(
                         context.get("source_kind"),
@@ -264,6 +265,13 @@ def rebuild_index(
                         == forgotten_conversation_id,
                     )
                 )
+                db.execute(
+                    delete(StandingIntent).where(
+                        StandingIntent.identity_id == identity_id,
+                        StandingIntent.source_conversation_id
+                        == forgotten_conversation_id,
+                    )
+                )
             if lifecycle == "delete":
                 db.execute(
                     delete(MemorySource).where(
@@ -295,30 +303,12 @@ def rebuild_index(
             )
             repo.update(db, row, **fields)
 
-    # A source-forget operation may crash after removing the source entry but
-    # before removing the automatic core that depended only on it. The source
-    # mutation carries the intended cascade IDs so recovery does not lose that
-    # edge when it deletes the MemorySource row. Re-check sources here: a core
-    # that gained another valid source while recovery was pending must survive.
+    # A source-forget operation may crash before removing its dependent core.
+    # The source mutation records the full deletion plan, including mixed-source
+    # cores and direct memories, so recovery must finish that plan.
     for core_id in cascade_core_ids:
         core = repo.get_owned(db, identity_id, core_id)
-        if core is None or core.origin != "automatic":
-            continue
-        remaining_source = db.scalars(
-            select(MemorySource.id).where(
-                MemorySource.identity_id == identity_id,
-                MemorySource.memory_id == core_id,
-            )
-        ).first()
-        legacy_remaining = db.scalars(
-            select(Memory.id).where(
-                Memory.identity_id == identity_id,
-                Memory.tier == "episodic",
-                Memory.status == "active",
-                Memory.promoted_to_id == core_id,
-            )
-        ).first()
-        if remaining_source is not None or legacy_remaining is not None:
+        if core is None:
             continue
         mutation = None
         if core.file_path and core.entry_key:

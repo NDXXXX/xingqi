@@ -7,6 +7,9 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 
+from sqlalchemy import bindparam, text
+from sqlalchemy.exc import OperationalError
+
 from zhiyu.core.providers.embedding import embed_text, embed_text_async, load_vectors
 from zhiyu.infrastructure.database.models import Memory, utcnow
 
@@ -14,6 +17,7 @@ from zhiyu.infrastructure.database.models import Memory, utcnow
 _RECALL_RE = re.compile(r"上次|之前|以前|记得|说过|聊过|提到|那天|上回|当时|曾经|搬家前")
 _CURRENT_RE = re.compile(r"现在|目前|以后|最近|当前")
 _PAST_RE = re.compile(r"以前|之前|当时|曾经|搬家前|过去")
+_SELF_NAME_RE = re.compile(r"你.{0,8}(?:叫什么|叫啥|名字|称呼)|助手.{0,8}(?:叫什么|名字|称呼)|我给你起名")
 _REFERENCE_RE = re.compile(
     r"那个|这个|那里|那儿|这里|她|他|它|上次的|以前那个|照旧|什么人|哪个"
 )
@@ -154,6 +158,12 @@ def build_query_plan(query: str, history: list[dict] | None = None) -> QueryPlan
         if len(variants) >= 24:
             break
 
+    if _SELF_NAME_RE.search(normalized):
+        for variant in ("给助手起名", "助手名字"):
+            if variant not in seen:
+                variants.append(variant)
+                seen.add(variant)
+
     if _REFERENCE_RE.search(normalized) and history:
         for message in reversed(history[-4:]):
             if message.get("role") != "user":
@@ -239,6 +249,44 @@ def _cosine(a: list[float], b: list[float]) -> float:
     if norm_a == 0.0 or norm_b == 0.0:
         return 0.0
     return dot / (norm_a * norm_b)
+
+
+def fts_ranked_ids(db, query: str, identity_ids: set[str], limit: int = 50) -> list[str]:
+    """BM25 候选；旧测试库或未迁移数据库继续使用现有词法检索。"""
+    if not identity_ids or db.get_bind().dialect.name != "sqlite":
+        return []
+    plan = build_query_plan(query)
+    terms: list[str] = []
+    seen: set[str] = set()
+    for variant in plan.variants:
+        compact = re.sub(r"[^a-z0-9\u4e00-\u9fff]", "", _compact(variant))
+        for term in sorted(_ngrams_compact(compact, 3)):
+            if len(term) != 3 or term in seen:
+                continue
+            seen.add(term)
+            terms.append(term)
+            if len(terms) >= 48:
+                break
+        if len(terms) >= 48:
+            break
+    if not terms:
+        return []
+    expression = " OR ".join('"' + term + '"' for term in terms)
+    statement = text(
+        "SELECT memories.id FROM memory_fts "
+        "JOIN memories ON memories.rowid = memory_fts.rowid "
+        "WHERE memory_fts MATCH :expression "
+        "AND memories.identity_id IN :identities AND memories.status = 'active' "
+        "ORDER BY bm25(memory_fts) LIMIT :limit"
+    ).bindparams(bindparam("identities", expanding=True))
+    try:
+        return list(db.scalars(statement, {
+            "expression": expression,
+            "identities": sorted(identity_ids),
+            "limit": limit,
+        }))
+    except OperationalError:
+        return []
 
 
 def retrieve(
@@ -361,8 +409,19 @@ def _rank_from_plan(
         "exact": [],
         "trigger": [],
         "lexical": [],
+        "bm25": [],
         "vector": [],
     }
+    by_id = {memory.id: memory for memory in searchable}
+    fts_ids = fts_ranked_ids(
+        db, plan.original,
+        {memory.identity_id for memory in searchable if memory.identity_id},
+        limit=lexical_limit,
+    )
+    for rank, memory_id in enumerate(fts_ids, 1):
+        memory = by_id.get(memory_id)
+        if memory is not None:
+            channels["bm25"].append((1.0 / rank, memory))
     query_features = [
         (_ngrams(variant, 2), _ngrams(variant, 3))
         for variant in plan.variants
@@ -414,7 +473,7 @@ def _rank_from_plan(
             if similarity >= 0.35:
                 channels["vector"].append((similarity, memory))
 
-    limits = {"exact": 20, "trigger": 10, "lexical": lexical_limit, "vector": vector_limit}
+    limits = {"exact": 20, "trigger": 10, "lexical": lexical_limit, "bm25": lexical_limit, "vector": vector_limit}
     for name, values in channels.items():
         values.sort(key=lambda item: item[0], reverse=True)
         channels[name] = values[: limits[name]]

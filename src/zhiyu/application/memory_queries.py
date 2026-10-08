@@ -36,11 +36,16 @@ class MemoryQueryService(MemoryOperations):
         needle = query.strip().lower()
         if not needle:
             raise ValueError("搜索内容不能为空")
-        return [
-            item
-            for item in self.list(include_inactive=include_inactive, tier=tier)
-            if needle in item.content.lower()
-        ]
+        with self.session_factory() as db:
+            identity_id = self.identities.local(db).id
+            self._sync(db, identity_id)
+            memories = self.memories.list_owned(
+                db, identity_id, statuses=None if include_inactive else ("active",), tier=tier
+            )
+            if include_inactive:
+                return [_summary(db, item) for item in memories if needle in item.content.lower()]
+            trace = hybrid_rank(db, query, memories, top_k=50)
+            return [_summary(db, item.memory) for item in trace.selected]
 
     def get(self, memory_id: str) -> MemorySummary | None:
         with self.session_factory() as db:

@@ -6,17 +6,22 @@
 from __future__ import annotations
 
 import re
+import hashlib
+from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from zhiyu.infrastructure.database.models import ForgottenConversation
+from zhiyu.infrastructure.database.models import ForgottenConversation, MemoryRecallEvent
 from zhiyu.infrastructure.database.repositories.conversation_repository import ConversationRepository
 from zhiyu.infrastructure.database.repositories.memory_repository import MemoryRepository
 from zhiyu.infrastructure.database.repositories.message_repository import MessageRepository
-from .retriever import _lexical_similarity, build_query_plan, retrieve
+from .retriever import _lexical_similarity, build_query_plan, normalize_text, retrieve
 
-_RECALL_RE = re.compile(r"上次|之前|以前|记得|说过|聊过|提到|那天|上回|上一次|回忆|当时")
+_RECALL_RE = re.compile(
+    r"上次|之前|以前|记得|说过|聊过|提到|那天|上回|上一次|回忆|当时"
+    r"|我的.{0,8}(?:是什么|叫什么|叫啥|名字)"
+)
 
 
 def has_recall_intent(query: str) -> bool:
@@ -36,12 +41,42 @@ def deep_recall(
     episodic = MemoryRepository().list_owned(
         db, identity_id, tier="episodic", statuses=("active",)
     )
+    forgotten = set(db.scalars(
+        select(ForgottenConversation.conversation_id).where(
+            ForgottenConversation.identity_id == identity_id
+        )
+    ))
+    allowed_conversations = {
+        item.id for item in ConversationRepository().list(db)
+        if item.identity_id == identity_id
+        and (item.channel == "local" or (
+            item.channel == "qq" and item.external_conversation_type == "private"
+        ))
+        and item.id not in forgotten
+    }
     episodic = [
-        item for item in episodic if item.promotion_status not in {"promoted", "rejected", "deferred"}
+        item for item in episodic
+        if item.trust in {"owner", "agent"}
+        and item.promotion_status not in {"promoted", "rejected", "deferred"}
+        and (item.conversation_id is None or item.conversation_id in allowed_conversations)
     ]
     hits = retrieve(query, episodic, top_k=3)
     if hits:
-        parts.append("相关历史观察：\n" + "\n".join(f"- {item.content}" for item in hits))
+        plan = build_query_plan(query)
+        query_hash = hashlib.sha256(normalize_text(query).encode("utf-8")).hexdigest()
+        for item in hits:
+            score = max(
+                (_lexical_similarity(variant, item.content) for variant in plan.variants),
+                default=0.0,
+            )
+            db.add(MemoryRecallEvent(
+                id=str(uuid4()), memory_id=item.id, identity_id=identity_id,
+                query_hash=query_hash, score=score, recall_mode="deep",
+            ))
+        db.flush()
+        parts.append("相关历史观察：\n" + "\n".join(
+            f"- [{item.file_path or '历史观察'}] {item.content}" for item in hits
+        ))
 
     history = _search_history(
         db,
@@ -71,12 +106,19 @@ def _search_history(
             )
         )
     )
+    current = (
+        ConversationRepository().get(db, current_conversation_id)
+        if current_conversation_id else None
+    )
     conversations = [
         item
         for item in ConversationRepository().list(db)
         if item.identity_id == identity_id
+        and (current is None or item.channel == current.channel)
         and item.id != exclude_conversation_id
-        and (current_conversation_id is None or item.id == current_conversation_id)
+        and (item.channel == "local" or (
+            item.channel == "qq" and item.external_conversation_type == "private"
+        ))
         and item.id not in forgotten
     ]
     plan = build_query_plan(query)

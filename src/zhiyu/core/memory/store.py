@@ -2,6 +2,7 @@
 
 文件布局（``settings.memory_dir`` 下）：
 - ``identities/<identity_id>/USER.md`` 用户模型（profile / preference）
+- ``identities/<identity_id>/IDENTITY.md`` 助手身份
 - ``identities/<identity_id>/MEMORY.md`` 长期核心
 - ``identities/<identity_id>/daily/YYYY-MM-DD.md`` 情景观察
 - ``identities/<identity_id>/DREAMS.md`` 巩固审查日志
@@ -27,6 +28,7 @@ from filelock import FileLock
 from zhiyu.infrastructure.config.settings import settings
 
 USER_FILE = "USER.md"
+IDENTITY_FILE = "IDENTITY.md"
 CORE_FILE = "MEMORY.md"
 DREAMS_FILE = "DREAMS.md"
 
@@ -142,6 +144,15 @@ class MemoryStore:
     def user_path_for(self, identity_id: str) -> Path:
         return self.vault_dir(identity_id) / USER_FILE
 
+    def identity_path_for(self, identity_id: str) -> Path:
+        return self.vault_dir(identity_id) / IDENTITY_FILE
+
+    def assistant_name(self, identity_id: str) -> str | None:
+        for entry in reversed(self.read_entries(self.identity_path_for(identity_id))):
+            if entry.content.startswith("助手名字是 "):
+                return entry.content.removeprefix("助手名字是 ").strip() or None
+        return None
+
     def core_path_for(self, identity_id: str) -> Path:
         return self.vault_dir(identity_id) / CORE_FILE
 
@@ -184,7 +195,11 @@ class MemoryStore:
         """只返回受管的 USER、MEMORY 和 daily 文件。"""
         if identity_id:
             vault = self.vault_dir(identity_id)
-            files = [self.user_path_for(identity_id), self.core_path_for(identity_id)]
+            files = [
+                self.identity_path_for(identity_id),
+                self.user_path_for(identity_id),
+                self.core_path_for(identity_id),
+            ]
             daily = vault / "daily"
             if daily.exists():
                 files.extend(sorted(daily.glob("????-??-??.md")))
@@ -201,7 +216,7 @@ class MemoryStore:
         if not resolved.is_relative_to(vault):
             return False
         relative = resolved.relative_to(vault)
-        if relative.as_posix() in (USER_FILE, CORE_FILE):
+        if relative.as_posix() in (IDENTITY_FILE, USER_FILE, CORE_FILE):
             return True
         return (
             len(relative.parts) == 2

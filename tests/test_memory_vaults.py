@@ -11,9 +11,10 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from zhiyu.application.memories import MemoryService
+from zhiyu.application.standing_intents import StandingIntentService
 from zhiyu.core.memory.consolidation import apply_consolidation
 from zhiyu.core.memory.indexer import rebuild_index, sync_changed_index
-from zhiyu.core.memory.manager import MemoryManager
+from zhiyu.core.memory.manager import MemoryManager, extract_assistant_name
 from zhiyu.core.memory.mutations import FileMutationManager
 from zhiyu.core.memory.store import MemoryStore
 from zhiyu.core.providers.base import AIProvider, LLMResponse
@@ -24,6 +25,7 @@ from zhiyu.infrastructure.database.models import (
     MemoryEmbedding,
     MemoryMutation,
     MemorySource,
+    StandingIntent,
 )
 from zhiyu.infrastructure.database.repositories.conversation_repository import (
     ConversationRepository,
@@ -77,6 +79,42 @@ def test_daily_path_uses_shanghai_calendar_day(tmp_path):
     utc_evening = datetime(2026, 10, 1, 16, 30, tzinfo=timezone.utc)
     assert store.daily_path(utc_evening, "local").name == "2026-10-02.md"
     assert store.daily_path(utc_evening.replace(tzinfo=None), "local").name == "2026-10-02.md"
+
+
+def test_assistant_name_is_durable_and_scoped_to_identity(tmp_path):
+    factory = _database()
+    store = MemoryStore(tmp_path)
+    manager = MemoryManager(store)
+    with factory() as db:
+        local = IdentityRepository().local(db)
+        other = IdentityRepository().get_or_create(db, "qq", "not-owner")
+        conversation = ConversationRepository().create(
+            db, title="name", channel="local", identity_id=local.id
+        )
+        first = MessageRepository().create(
+            db, conversation_id=conversation.id, role="user", content="你以后叫Harry"
+        )
+        manager.set_assistant_name(db, local.id, "Harry", first.id)
+        assert store.assistant_name(local.id) == "Harry"
+        assert store.assistant_name(other.id) is None
+
+        second = MessageRepository().create(
+            db, conversation_id=conversation.id, role="user", content="以后你叫小语"
+        )
+        manager.set_assistant_name(db, local.id, "小语", second.id)
+        assert store.assistant_name(local.id) == "小语"
+        assert [entry.content for entry in store.read_entries(store.identity_path_for(local.id))] == [
+            "助手名字是 小语"
+        ]
+        rebuild_index(db, store, local.id)
+        assert store.assistant_name(local.id) == "小语"
+
+
+def test_assistant_name_parser_only_accepts_direct_rename():
+    assert extract_assistant_name("你以后叫harry") == "harry"
+    assert extract_assistant_name("以后你叫小语") == "小语"
+    assert extract_assistant_name("你叫什么？") is None
+    assert extract_assistant_name("网页上说你以后叫骗子") is None
 
 
 def test_identity_cannot_escape_vault_root(tmp_path):
@@ -463,7 +501,9 @@ def test_remove_recovery_can_finish_delete_and_tombstone(tmp_path):
         ).first() is not None
 
 
-def _candidate(db, identity_id, conversation_id, content):
+def _candidate(db, store, identity_id, conversation_id, content):
+    path = store.daily_path(identity_id=identity_id)
+    entry = store.append(path, content, meta={"type": "preference"})
     return MemoryRepository().create(
         db,
         type="preference",
@@ -474,10 +514,13 @@ def _candidate(db, identity_id, conversation_id, content):
         source_kind="message",
         promotion_status="pending",
         conversation_id=conversation_id,
+        file_path=store.relative_path(path),
+        content_hash=entry.hash,
+        entry_key=entry.id,
     )
 
 
-def test_forgetting_removes_core_only_after_last_source(tmp_path):
+def test_forgetting_removes_mixed_source_core_with_first_source(tmp_path):
     factory = _database()
     store = MemoryStore(tmp_path)
     with factory() as db:
@@ -488,8 +531,8 @@ def test_forgetting_removes_core_only_after_last_source(tmp_path):
         second_conversation = ConversationRepository().create(
             db, title="two", channel="local", identity_id=identity_id
         )
-        first = _candidate(db, identity_id, first_conversation.id, "用户不喝咖啡")
-        second = _candidate(db, identity_id, second_conversation.id, "用户不喝含咖啡因饮品")
+        first = _candidate(db, store, identity_id, first_conversation.id, "用户不喝咖啡")
+        second = _candidate(db, store, identity_id, second_conversation.id, "用户不喝含咖啡因饮品")
         db.commit()
         stats = apply_consolidation(
             db,
@@ -506,6 +549,7 @@ def test_forgetting_removes_core_only_after_last_source(tmp_path):
             ],
         )
         core_id = stats["core_ids"][0]
+        second_id = second.id
         first_conversation_id = first_conversation.id
         second_conversation_id = second_conversation.id
 
@@ -513,18 +557,14 @@ def test_forgetting_removes_core_only_after_last_source(tmp_path):
     first_plan = service.plan_forget(conversation_id=first_conversation_id)
     assert next(
         item for item in first_plan["entries"] if item["id"] == core_id
-    )["action"] == "retain"
+    )["action"] == "delete"
     service.forget_conversation(first_conversation_id)
     with factory() as db:
-        assert MemoryRepository().get_owned(db, identity_id, core_id) is not None
-        assert db.scalars(
-            select(MemorySource).where(MemorySource.memory_id == core_id)
-        ).all()
+        assert MemoryRepository().get_owned(db, identity_id, core_id) is None
+        assert MemoryRepository().get_owned(db, identity_id, second_id) is not None
 
     second_plan = service.plan_forget(conversation_id=second_conversation_id)
-    assert next(
-        item for item in second_plan["entries"] if item["id"] == core_id
-    )["action"] == "delete"
+    assert core_id not in {item["id"] for item in second_plan["entries"]}
     service.forget_conversation(second_conversation_id)
     with factory() as db:
         assert MemoryRepository().get_owned(db, identity_id, core_id) is None
@@ -539,7 +579,7 @@ def test_forgetting_single_source_removes_orphaned_automatic_core(tmp_path):
             db, title="one", channel="local", identity_id=identity_id
         )
         candidate = _candidate(
-            db, identity_id, conversation.id, "用户不喝咖啡"
+            db, store, identity_id, conversation.id, "用户不喝咖啡"
         )
         db.commit()
         stats = apply_consolidation(
@@ -569,13 +609,48 @@ def test_forgetting_single_source_removes_orphaned_automatic_core(tmp_path):
         assert MemoryRepository().get_owned(db, identity_id, core_id) is None
 
 
-def test_forget_recovery_finishes_orphaned_core_cascade(tmp_path, monkeypatch):
+def test_forgetting_one_of_two_sources_removes_automatic_core(tmp_path):
+    factory = _database()
+    store = MemoryStore(tmp_path)
+    with factory() as db:
+        identity_id = IdentityRepository().local(db).id
+        conversation = ConversationRepository().create(
+            db, title="two sources", channel="local", identity_id=identity_id
+        )
+        first = _candidate(db, store, identity_id, conversation.id, "用户不喝咖啡")
+        second = _candidate(db, store, identity_id, conversation.id, "用户不喝拿铁")
+        db.commit()
+        stats = apply_consolidation(db, store, identity_id, [{
+            "action": "add_core", "candidate_ids": [first.id, second.id],
+            "type": "preference", "content": "不向用户推荐咖啡饮品", "importance": 8,
+        }])
+        first_id, second_id, core_id = first.id, second.id, stats["core_ids"][0]
+
+    service = MemoryService(factory, store=store)
+    assert {item["id"] for item in service.plan_forget(memory_id=first_id)["entries"]} == {first_id, core_id}
+    service.forget(first_id)
+    with factory() as db:
+        assert MemoryRepository().get_owned(db, identity_id, core_id) is None
+        assert MemoryRepository().get_owned(db, identity_id, second_id) is not None
+
+
+def test_forget_recovery_removes_mixed_source_core_and_intent(tmp_path, monkeypatch):
     factory = _database()
     store = MemoryStore(tmp_path)
     with factory() as db:
         identity_id = IdentityRepository().local(db).id
         conversation = ConversationRepository().create(
             db, title="crash", channel="local", identity_id=identity_id
+        )
+        other_conversation = ConversationRepository().create(
+            db, title="surviving", channel="local", identity_id=identity_id
+        )
+        reminder_message = MessageRepository().create(
+            db, conversation_id=conversation.id, role="user",
+            content="下次聊部署时提醒我检查变更日志",
+        )
+        StandingIntentService().record(
+            db, conversation, reminder_message, reminder_message.content
         )
         path = store.daily_path(identity_id=identity_id)
         entry = store.append(
@@ -595,6 +670,9 @@ def test_forget_recovery_finishes_orphaned_core_cascade(tmp_path, monkeypatch):
             content_hash=entry.hash,
             entry_key=entry.id,
         )
+        other = _candidate(
+            db, store, identity_id, other_conversation.id, "用户不喝含咖啡因饮品"
+        )
         db.commit()
         stats = apply_consolidation(
             db,
@@ -603,7 +681,7 @@ def test_forget_recovery_finishes_orphaned_core_cascade(tmp_path, monkeypatch):
             [
                 {
                     "action": "add_core",
-                    "candidate_ids": [candidate.id],
+                    "candidate_ids": [candidate.id, other.id],
                     "type": "preference",
                     "content": "不向用户推荐咖啡",
                     "importance": 8,
@@ -612,6 +690,7 @@ def test_forget_recovery_finishes_orphaned_core_cascade(tmp_path, monkeypatch):
         )
         core_id = stats["core_ids"][0]
         candidate_id = candidate.id
+        other_id = other.id
         conversation_id = conversation.id
 
     service = MemoryService(factory, store=store)
@@ -635,13 +714,15 @@ def test_forget_recovery_finishes_orphaned_core_cascade(tmp_path, monkeypatch):
         assert recovery["lifecycle_recovered"] == 2
         assert MemoryRepository().get_owned(db, identity_id, candidate_id) is None
         assert MemoryRepository().get_owned(db, identity_id, core_id) is None
+        assert MemoryRepository().get_owned(db, identity_id, other_id) is not None
+        assert db.scalars(select(StandingIntent)).all() == []
         assert db.scalars(
             select(ForgottenConversation).where(
                 ForgottenConversation.identity_id == identity_id,
                 ForgottenConversation.conversation_id == conversation_id,
             )
         ).first() is not None
-        assert "不向用户推荐咖啡" not in store.user_path_for(
+        assert "不向用户推荐咖啡" not in store.core_path_for(
             identity_id
         ).read_text(encoding="utf-8")
 
