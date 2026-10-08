@@ -3,16 +3,28 @@
 import asyncio
 import json
 from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
+from zhiyu.core.agent.context import compact_messages
 from zhiyu.core.providers.base import AIProvider, LLMResponse
 from zhiyu.core.tools.registry import ToolRegistry
 from .graph import MAX_ROUNDS
 
 RUN_TIMEOUT_SECONDS = 180
-ProviderFallback = tuple[str, AIProvider, str]
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderCandidate:
+    provider_id: str
+    provider: AIProvider
+    model: str
+    supports_tools: bool = True
+    supports_streaming: bool = True
+    context_window: int | None = None
+    max_output_tokens: int | None = None
 
 
 def _redact(value: Any) -> Any:
@@ -53,13 +65,21 @@ async def _execute(
     emit_content: bool = False,
     supports_tools: bool = True,
     max_output_tokens: int | None = None,
+    context_window: int | None = None,
     provider_id: str | None = None,
-    fallbacks: list[ProviderFallback] | None = None,
+    fallbacks: list[ProviderCandidate] | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     current_messages = list(messages)
-    tools = registry.to_openai_tools() if supports_tools else None
-    candidates: list[ProviderFallback] = [
-        (provider_id or "primary", provider, model),
+    candidates = [
+        ProviderCandidate(
+            provider_id or "primary",
+            provider,
+            model,
+            supports_tools=supports_tools,
+            supports_streaming=streaming,
+            context_window=context_window,
+            max_output_tokens=max_output_tokens,
+        ),
         *(fallbacks or []),
     ]
     active_candidate = 0
@@ -76,18 +96,40 @@ async def _execute(
         last_error: Exception | None = None
 
         for candidate_index in range(active_candidate, len(candidates)):
-            candidate_id, candidate_provider, candidate_model = candidates[candidate_index]
+            candidate = candidates[candidate_index]
+            candidate_id = candidate.provider_id
+            candidate_provider = candidate.provider
+            candidate_model = candidate.model
+            has_tool_history = any(
+                item.get("role") == "tool" or item.get("tool_calls")
+                for item in current_messages
+            )
+            if has_tool_history and not candidate.supports_tools:
+                yield {
+                    "type": "step",
+                    "name": "provider_fallback_skipped",
+                    "status": "completed",
+                    "output": {"provider_id": candidate_id, "reason": "model does not support tools"},
+                }
+                continue
+            request_messages = compact_messages(
+                current_messages,
+                candidate.context_window,
+                candidate.max_output_tokens,
+            )[0]
+            candidate_tools = registry.to_openai_tools() if candidate.supports_tools else None
+            use_stream = streaming and candidate.supports_streaming
             provider_options: dict[str, Any] = {"model": candidate_model}
-            if max_output_tokens is not None:
-                provider_options["max_output_tokens"] = max_output_tokens
+            if candidate.max_output_tokens is not None:
+                provider_options["max_output_tokens"] = candidate.max_output_tokens
             for attempt in range(2):
                 response = None
                 emitted_content = False
                 try:
-                    if streaming:
+                    if use_stream:
                         async for item in candidate_provider.stream_chat(
-                            messages=current_messages,
-                            tools=tools,
+                            messages=request_messages,
+                            tools=candidate_tools,
                             **provider_options,
                         ):
                             if isinstance(item, str):
@@ -97,8 +139,8 @@ async def _execute(
                                 response = item
                     else:
                         result = await candidate_provider.chat(
-                            messages=current_messages,
-                            tools=tools,
+                            messages=request_messages,
+                            tools=candidate_tools,
                             stream=False,
                             **provider_options,
                         )
@@ -126,15 +168,15 @@ async def _execute(
             if call_succeeded:
                 break
             if candidate_index + 1 < len(candidates):
-                next_id, _, next_model = candidates[candidate_index + 1]
+                next_candidate = candidates[candidate_index + 1]
                 yield {
                     "type": "step",
                     "name": "provider_fallback",
                     "status": "completed",
                     "output": {
                         "from_provider_id": candidate_id,
-                        "to_provider_id": next_id,
-                        "model": next_model,
+                        "to_provider_id": next_candidate.provider_id,
+                        "model": next_candidate.model,
                         "reason": str(last_error) if last_error else "provider unavailable",
                     },
                 }
@@ -220,8 +262,8 @@ async def _execute(
         "final_response": final_response,
         "prompt_tokens": prompt_tokens if has_usage else None,
         "completion_tokens": completion_tokens if has_usage else None,
-        "provider_id": candidates[active_candidate][0],
-        "model": candidates[active_candidate][2],
+        "provider_id": candidates[active_candidate].provider_id,
+        "model": candidates[active_candidate].model,
     }
 
 
@@ -234,8 +276,9 @@ async def run_agent(
     *,
     supports_tools: bool = True,
     max_output_tokens: int | None = None,
+    context_window: int | None = None,
     provider_id: str | None = None,
-    fallbacks: list[ProviderFallback] | None = None,
+    fallbacks: list[ProviderCandidate] | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     del conversation_id
     async with asyncio.timeout(RUN_TIMEOUT_SECONDS):
@@ -247,6 +290,7 @@ async def run_agent(
             streaming=False,
             supports_tools=supports_tools,
             max_output_tokens=max_output_tokens,
+            context_window=context_window,
             provider_id=provider_id,
             fallbacks=fallbacks,
         ):
@@ -263,8 +307,9 @@ async def run_agent_stream(
     supports_streaming: bool = True,
     supports_tools: bool = True,
     max_output_tokens: int | None = None,
+    context_window: int | None = None,
     provider_id: str | None = None,
-    fallbacks: list[ProviderFallback] | None = None,
+    fallbacks: list[ProviderCandidate] | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     del conversation_id
     async with asyncio.timeout(RUN_TIMEOUT_SECONDS):
@@ -277,6 +322,7 @@ async def run_agent_stream(
             emit_content=True,
             supports_tools=supports_tools,
             max_output_tokens=max_output_tokens,
+            context_window=context_window,
             provider_id=provider_id,
             fallbacks=fallbacks,
         ):

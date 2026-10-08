@@ -8,11 +8,13 @@ export function useChatSession({
   refreshConversations,
   onConversationCreated,
   onErrorClear,
+  onRequestError,
 }: {
   conversationId: string | null;
   refreshConversations: () => Promise<void>;
   onConversationCreated: (id: string) => void;
   onErrorClear: () => void;
+  onRequestError: (error: string) => void;
 }) {
   const [messages, setMessages] = useState<Item[]>([]);
   const [draft, setDraft] = useState("");
@@ -52,6 +54,7 @@ export function useChatSession({
       const text = draft.trim();
       if (!text || busy) return;
       const requestId = conversationId;
+      const assistantMessageId = crypto.randomUUID();
       const controller = new AbortController();
       const run = {
         controller,
@@ -65,15 +68,17 @@ export function useChatSession({
       setMessages((current) => [
         ...current,
         { role: "user", content: text },
-        { role: "assistant", content: "", pending: true },
+        { id: assistantMessageId, role: "assistant", content: "", pending: true },
       ]);
       setActivity("正在思考…");
-      const updateAssistant = (change: (previous: Item) => Item) =>
-        setMessages((current) => {
-          if (!isCurrentRequest(streamRef.current, run)) return current;
-          const index = current.length - 1;
-          return current.map((item, i) => (i === index ? change(item) : item));
-        });
+      const updateAssistant = (change: (previous: Item) => Item) => {
+        if (!isCurrentRequest(streamRef.current, run)) return;
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId ? change(item) : item,
+          ),
+        );
+      };
       try {
         const response = await fetch("/api/chat", {
           method: "POST",
@@ -86,6 +91,8 @@ export function useChatSession({
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
+        let terminalEvent = false;
+        let failed = false;
         while (true) {
           const { value, done } = await reader.read();
           buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
@@ -114,22 +121,37 @@ export function useChatSession({
                   ? `工具 · ${message.name} · ${message.status}`
                   : message.name,
               );
-            if (message.type === "error") throw new Error(message.error);
-            if (message.type === "done")
+            if (message.type === "error") {
+              terminalEvent = true;
+              failed = true;
+              onRequestError(errorText(message.error));
+              updateAssistant((item) => ({
+                ...item,
+                pending: false,
+                error: errorText(message.error),
+                content: item.content || "",
+              }));
+            }
+            if (message.type === "done") {
+              terminalEvent = true;
               updateAssistant((item) => ({
                 ...item,
                 content: item.content || message.response,
                 pending: false,
               }));
+            }
           }
           if (done) break;
         }
         if (isCurrentRequest(streamRef.current, run)) {
           setActivity("");
-          await refreshConversations();
+          if (!terminalEvent) throw new Error("对话连接已结束，但服务未返回最终结果");
+          if (!failed) await refreshConversations();
         }
       } catch (error) {
         if (!controller.signal.aborted) {
+          if (isCurrentRequest(streamRef.current, run))
+            onRequestError(errorText(error));
           updateAssistant((item) => ({
             ...item,
             pending: false,
@@ -151,6 +173,7 @@ export function useChatSession({
       draft,
       onConversationCreated,
       onErrorClear,
+      onRequestError,
       refreshConversations,
     ],
   );

@@ -183,7 +183,10 @@ def _compact(text: str) -> str:
 
 
 def _ngrams(text: str, size: int) -> set[str]:
-    compact = _compact(text)
+    return _ngrams_compact(_compact(text), size)
+
+
+def _ngrams_compact(compact: str, size: int) -> set[str]:
     if not compact:
         return set()
     if len(compact) <= size:
@@ -207,6 +210,23 @@ def _lexical_similarity(query: str, content: str) -> float:
     return max(
         _set_cosine(_ngrams(query, 2), _ngrams(content, 2)),
         _set_cosine(_ngrams(query, 3), _ngrams(content, 3)),
+    )
+
+
+def _lexical_similarity_features(
+    query_features: list[tuple[set[str], set[str]]],
+    content_features: tuple[set[str], set[str]],
+) -> float:
+    content_bigrams, content_trigrams = content_features
+    return max(
+        (
+            max(
+                _set_cosine(query_bigrams, content_bigrams),
+                _set_cosine(query_trigrams, content_trigrams),
+            )
+            for query_bigrams, query_trigrams in query_features
+        ),
+        default=0.0,
     )
 
 
@@ -343,8 +363,13 @@ def _rank_from_plan(
         "lexical": [],
         "vector": [],
     }
+    query_features = [
+        (_ngrams(variant, 2), _ngrams(variant, 3))
+        for variant in plan.variants
+    ]
     for memory in searchable:
         content = normalize_text(memory.content)
+        compact = "".join(content.split())
         exact = max(
             (
                 1.0
@@ -370,9 +395,12 @@ def _rank_from_plan(
         if trigger_score:
             channels["trigger"].append((trigger_score, memory))
 
-        lexical = max(
-            (_lexical_similarity(variant, memory.content) for variant in plan.variants),
-            default=0.0,
+        lexical = _lexical_similarity_features(
+            query_features,
+            (
+                _ngrams_compact(compact, 2),
+                _ngrams_compact(compact, 3),
+            ),
         )
         if lexical >= 0.12:
             channels["lexical"].append((lexical, memory))

@@ -4,7 +4,7 @@ import asyncio
 
 import httpx
 
-from zhiyu.core.agent.runtime import run_agent, run_agent_stream
+from zhiyu.core.agent.runtime import ProviderCandidate, run_agent, run_agent_stream
 from zhiyu.core.agent.run_manager import ActiveRunManager
 from zhiyu.core.providers.base import AIProvider, LLMResponse, ToolCall
 from zhiyu.core.tools.registry import default_registry
@@ -164,7 +164,9 @@ async def test_retryable_primary_failure_switches_to_fallback_and_records_usage(
             "conv-1",
             [{"role": "user", "content": "你好"}],
             provider_id="primary",
-            fallbacks=[("backup", FallbackProvider(), "backup-model")],
+            fallbacks=[
+                ProviderCandidate("backup", FallbackProvider(), "backup-model")
+            ],
         )
     ]
 
@@ -176,6 +178,59 @@ async def test_retryable_primary_failure_switches_to_fallback_and_records_usage(
     assert events[-1]["model"] == "backup-model"
     assert events[-1]["prompt_tokens"] == 12
     assert events[-1]["completion_tokens"] == 4
+
+
+async def test_fallback_uses_its_model_capabilities_and_context_window():
+    class UnavailableProvider(PlainProvider):
+        async def chat(self, messages, tools=None, stream=False, **kwargs):
+            request = httpx.Request("POST", "https://primary.invalid")
+            raise httpx.ConnectError("offline", request=request)
+
+    class FallbackProvider(PlainProvider):
+        def __init__(self):
+            self.request = None
+
+        async def chat(self, messages, tools=None, stream=False, **kwargs):
+            self.request = {"messages": messages, "tools": tools, "stream": stream, **kwargs}
+            return LLMResponse(content="备用模型回答")
+
+    fallback = FallbackProvider()
+    messages = [
+        {"role": role, "content": f"{role} 内容 " * 200}
+        for role in ("user", "assistant", "user", "assistant")
+    ]
+    messages.append({"role": "user", "content": "保留最新请求"})
+
+    events = [
+        event
+        async for event in run_agent_stream(
+            UnavailableProvider(),
+            default_registry(),
+            "primary-model",
+            "conv-1",
+            messages,
+            fallbacks=[
+                ProviderCandidate(
+                    "backup",
+                    fallback,
+                    "backup-model",
+                    supports_tools=False,
+                    supports_streaming=False,
+                    context_window=200,
+                    max_output_tokens=64,
+                )
+            ],
+        )
+    ]
+
+    assert events[-1]["final_response"] == "备用模型回答"
+    assert fallback.request is not None
+    assert fallback.request["tools"] is None
+    assert fallback.request["stream"] is False
+    assert fallback.request["model"] == "backup-model"
+    assert fallback.request["max_output_tokens"] == 64
+    assert fallback.request["messages"][-1]["content"] == "保留最新请求"
+    assert len(fallback.request["messages"]) < len(messages)
 
 
 async def test_streaming_agent_fallback_keeps_tool_loop():

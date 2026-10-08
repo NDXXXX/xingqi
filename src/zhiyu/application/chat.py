@@ -5,6 +5,7 @@ import json
 import logging
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
+from uuid import uuid4
 
 from sqlalchemy.orm import Session
 from pydantic import TypeAdapter
@@ -21,7 +22,7 @@ from zhiyu.channels.messages import (
 )
 from zhiyu.core.agent.context import build_tool_registry, with_agent_context_async
 from zhiyu.core.agent.run_manager import active_runs
-from zhiyu.core.agent.runtime import run_agent, run_agent_stream
+from zhiyu.core.agent.runtime import ProviderCandidate, run_agent, run_agent_stream
 from zhiyu.core.memory.manager import MemoryManager
 from zhiyu.core.memory.indexer import sync_changed_index
 from zhiyu.application.memory_jobs import MemoryJobProcessor
@@ -86,8 +87,9 @@ class _PreparedChat:
     supports_tools: bool
     supports_streaming: bool
     supports_vision: bool
+    context_window: int | None
     max_output_tokens: int | None
-    fallbacks: list[tuple[str, AIProvider, str]]
+    fallbacks: list[ProviderCandidate]
     messages: list[dict]
     user_message_id: str
 
@@ -118,6 +120,7 @@ class ChatService:
         self.media = MediaStore(session_factory)
 
     async def _prepare(self, db: Session, request: ChatRequest):
+        conversation_values: dict | None = None
         if request.channel == "qq":
             if not request.external_user_id:
                 raise ValueError("QQ 消息缺少发送者 ID")
@@ -127,12 +130,13 @@ class ChatService:
             if conversation is None:
                 raise ConversationNotFoundError("会话不存在")
         elif request.channel == "local":
-            conversation = self.conversations.create(
-                db,
-                title=request.message.strip()[:30] or "New Chat",
-                channel="local",
-                identity_id=self.identities.local(db).id,
-            )
+            identity_id = self.identities.local(db).id
+            conversation_values = {
+                "title": request.message.strip()[:30] or "New Chat",
+                "channel": "local",
+                "identity_id": identity_id,
+            }
+            conversation = Conversation(id=str(uuid4()), **conversation_values)
         else:
             if not request.external_user_id:
                 raise ValueError("外部渠道消息缺少用户 ID")
@@ -151,15 +155,15 @@ class ChatService:
                 conversation_type=request.external_conversation_type,
             )
             if conversation is None:
-                conversation = self.conversations.create(
-                    db,
-                    title=request.message.strip()[:30] or "New Chat",
-                    channel=request.channel,
-                    external_user_id=conversation_key,
-                    identity_id=identity.id,
-                    channel_config_id=request.channel_config_id,
-                    external_conversation_type=request.external_conversation_type,
-                )
+                conversation_values = {
+                    "title": request.message.strip()[:30] or "New Chat",
+                    "channel": request.channel,
+                    "external_user_id": conversation_key,
+                    "identity_id": identity.id,
+                    "channel_config_id": request.channel_config_id,
+                    "external_conversation_type": request.external_conversation_type,
+                }
+                conversation = Conversation(id=str(uuid4()), **conversation_values)
             elif request.channel == "qq" and conversation.identity_id != identity.id:
                 conversation.identity_id = identity.id
                 db.commit()
@@ -188,6 +192,9 @@ class ChatService:
             )
         except ProviderSelectionError as exc:
             raise ValueError(str(exc)) from exc
+
+        if conversation_values is not None:
+            conversation = self.conversations.create(db, **conversation_values)
 
         if request.regenerate:
             user_message = self.messages.prepare_regeneration(db, conversation.id)
@@ -292,7 +299,7 @@ class ChatService:
         configured_fallbacks = fallback_mapping.get(provider.id, [])
         if not isinstance(configured_fallbacks, list):
             configured_fallbacks = []
-        fallbacks: list[tuple[str, AIProvider, str]] = []
+        fallbacks: list[ProviderCandidate] = []
         for fallback_id in configured_fallbacks:
             if not isinstance(fallback_id, str):
                 continue
@@ -308,10 +315,14 @@ class ChatService:
             if model_config.supports_vision and not fallback_model.supports_vision:
                 continue
             fallbacks.append(
-                (
-                    fallback_config.id,
-                    self.providers.get_provider(fallback_config),
-                    fallback_model.model_name,
+                ProviderCandidate(
+                    provider_id=fallback_config.id,
+                    provider=self.providers.get_provider(fallback_config),
+                    model=fallback_model.model_name,
+                    supports_tools=fallback_model.supports_tools,
+                    supports_streaming=fallback_model.supports_streaming,
+                    context_window=fallback_model.context_window,
+                    max_output_tokens=fallback_model.max_output_tokens,
                 )
             )
 
@@ -324,6 +335,7 @@ class ChatService:
             supports_tools=model_config.supports_tools,
             supports_streaming=model_config.supports_streaming,
             supports_vision=model_config.supports_vision,
+            context_window=model_config.context_window,
             max_output_tokens=model_config.max_output_tokens,
             fallbacks=fallbacks,
             messages=llm_messages,
@@ -453,6 +465,7 @@ class ChatService:
             runner_options = {
                 "supports_tools": prepared.supports_tools,
                 "max_output_tokens": prepared.max_output_tokens,
+                "context_window": prepared.context_window,
                 "provider_id": prepared.provider_id,
                 "fallbacks": prepared.fallbacks,
             }

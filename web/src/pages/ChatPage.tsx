@@ -4,6 +4,7 @@ import type { Item } from "../types";
 export function ChatPage({
   conversationTitle,
   modelLabel,
+  requestError,
   messages,
   activity,
   draft,
@@ -14,6 +15,7 @@ export function ChatPage({
 }: {
   conversationTitle: string;
   modelLabel: string;
+  requestError: string;
   messages: Item[];
   activity: string;
   draft: string;
@@ -31,6 +33,11 @@ export function ChatPage({
         </div>
         <div className="badge">{modelLabel}</div>
       </header>
+      {requestError && !messages.some((item) => item.error) && (
+        <div className="error-text" role="alert">
+          {requestError}
+        </div>
+      )}
       <div className="messages">
         {messages.length ? (
           messages.map((item, index) => (

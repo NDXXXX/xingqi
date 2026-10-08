@@ -8,7 +8,7 @@ import statistics
 import tempfile
 import time
 from pathlib import Path
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid5
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -48,7 +48,7 @@ def benchmark(count: int, rounds: int) -> dict:
         path.write_text(
             "# 基准数据\n"
             + "".join(
-                f"- 基准记忆 {index:05d}：用户偏好与项目事实样例。 <!-- id={uuid4()} -->\n"
+                f"- 基准记忆 {index:05d}：用户偏好与项目事实样例。 <!-- id={uuid5(NAMESPACE_URL, f'zhiyu-memory-benchmark:{count}:{index}')} -->\n"
                 for index in range(count)
             ),
             encoding="utf-8",
@@ -99,6 +99,9 @@ def main() -> None:
     args = parser.parse_args()
     results = {
         "format": 1,
+        "seed": 1,
+        "dataset": "synthetic isolated SQLite and Markdown vault; no user data",
+        "rounds": args.rounds,
         "python": __import__("platform").python_version(),
         "sqlite": __import__("sqlite3").sqlite_version,
         "results": [benchmark(count, args.rounds) for count in args.counts],

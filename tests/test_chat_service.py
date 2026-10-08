@@ -4,6 +4,7 @@ import asyncio
 from unittest.mock import AsyncMock
 
 import httpx
+import pytest
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -40,6 +41,24 @@ class FakeProvider(AIProvider):
 class FakeRouter:
     def get_provider(self, _provider):
         return FakeProvider("fake-key")
+
+
+async def test_new_chat_without_provider_does_not_create_empty_conversation():
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    service = ChatService(sessions, FakeRouter(), AsyncMock())
+
+    with pytest.raises(ValueError, match="没有可用的 Provider"):
+        async for _event in service.run(ChatRequest(message="你好")):
+            pass
+
+    with sessions() as db:
+        conversations = ConversationRepository().list(db)
+
+    assert conversations == []
 
 
 async def test_chat_stream_persists_messages_and_run():

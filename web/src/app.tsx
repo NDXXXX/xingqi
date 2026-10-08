@@ -141,6 +141,7 @@ function App() {
     refreshConversations,
     onConversationCreated,
     onErrorClear: onChatErrorClear,
+    onRequestError: reportPageError,
   });
   const openConversation = useCallback(
     async (id: string, title?: string) => {
@@ -395,6 +396,7 @@ function App() {
                 ? `${overview.model.provider} · ${overview.model.model}`
                 : "默认模型未配置"
             }
+            requestError={pageError}
             messages={messages}
             activity={activity}
             draft={draft}

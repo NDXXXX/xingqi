@@ -1,0 +1,42 @@
+{
+  "format": 1,
+  "seed": 1,
+  "dataset": "synthetic isolated SQLite and Markdown vault; no user data",
+  "rounds": 25,
+  "python": "3.12.11",
+  "sqlite": "3.49.1",
+  "results": [
+    {
+      "memory_count": 1000,
+      "rounds": 25,
+      "rebuild_ms": 157.57,
+      "unchanged_sync": {
+        "p50_ms": 1.28,
+        "p95_ms": 1.92
+      },
+      "retrieval": {
+        "p50_ms": 38.69,
+        "p95_ms": 54.28
+      },
+      "candidate_count": 1000,
+      "unchanged_sync_files_scanned": 2,
+      "unchanged_sync_files_changed": 0
+    },
+    {
+      "memory_count": 10000,
+      "rounds": 25,
+      "rebuild_ms": 1487.41,
+      "unchanged_sync": {
+        "p50_ms": 1.25,
+        "p95_ms": 1.58
+      },
+      "retrieval": {
+        "p50_ms": 313.23,
+        "p95_ms": 325.76
+      },
+      "candidate_count": 10000,
+      "unchanged_sync_files_scanned": 2,
+      "unchanged_sync_files_changed": 0
+    }
+  ]
+}
