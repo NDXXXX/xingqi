@@ -191,6 +191,50 @@ async def test_new_command_starts_session_without_calling_agent(listener):
     router.handle.assert_not_called()
 
 
+async def test_stop_command_is_routed_without_calling_agent(listener):
+    adapter, router, _ = listener
+    router.stop_session.return_value = "当前会话没有运行中的回复。"
+    async with connect(adapter.ws_url, additional_headers={"Authorization": "Bearer secret"}) as ws:
+        await ws.send(private_message("/stop"))
+        reply = json.loads(await asyncio.wait_for(ws.recv(), 2))
+        await ws.send(json.dumps({
+            "status": "ok", "retcode": 0, "data": {}, "echo": reply["echo"]
+        }))
+    assert reply["params"]["message"][0]["data"]["text"] == "当前会话没有运行中的回复。"
+    router.stop_session.assert_awaited_once()
+    router.handle.assert_not_called()
+
+
+async def test_stop_command_bypasses_busy_conversation_lock(listener):
+    adapter, router, _ = listener
+    entered = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def slow(_event):
+        entered.set()
+        try:
+            await asyncio.Future()
+        finally:
+            cancelled.set()
+
+    router.handle.side_effect = slow
+    router.stop_session.return_value = "已停止当前回复。"
+    async with connect(adapter.ws_url, additional_headers={"Authorization": "Bearer secret"}) as ws:
+        await ws.send(private_message("正在处理"))
+        await asyncio.wait_for(entered.wait(), 2)
+        await ws.send(private_message("/stop"))
+        reply = json.loads(await asyncio.wait_for(ws.recv(), 2))
+        assert reply["action"] == "send_private_msg"
+        assert reply["params"]["message"][0]["data"]["text"] == "已停止当前回复。"
+        await ws.send(json.dumps({
+            "status": "ok", "retcode": 0, "data": {}, "echo": reply["echo"]
+        }))
+        router.stop_session.assert_awaited_once()
+        assert cancelled.is_set() is False
+        await asyncio.wait_for(adapter.stop(), 2)
+        assert cancelled.is_set()
+
+
 async def test_non_owner_private_message_is_ignored(listener):
     adapter, router, _ = listener
     async with connect(adapter.ws_url, additional_headers={"Authorization": "Bearer secret"}) as ws:

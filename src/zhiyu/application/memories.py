@@ -5,7 +5,7 @@ from __future__ import annotations
 from zhiyu.application.memory_lifecycle import MemoryLifecycleService
 from zhiyu.application.memory_queries import MemoryQueryService
 from zhiyu.application.memory_shared import MemorySummary
-from zhiyu.core.memory.indexer import rebuild_index
+from zhiyu.core.memory.indexer import get_index_status, rebuild_index
 from zhiyu.core.memory.store import MemoryStore
 from zhiyu.infrastructure.database.db import SessionLocal
 from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository
@@ -43,6 +43,10 @@ class MemoryService:
 
     def status(self) -> dict[str, int | str]:
         return self._queries.status()
+
+    def index_status(self) -> dict:
+        with self.session_factory() as db:
+            return get_index_status(db)
 
     def consolidation_runs(self, limit: int = 5) -> list[dict]:
         return self._queries.consolidation_runs(limit)

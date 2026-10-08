@@ -40,6 +40,28 @@ async def test_help_command_adds_message():
         assert any("命令：" in t for t in texts)
 
 
+async def test_stop_command_cancels_active_run(monkeypatch):
+    app = ChatApp(service=_FakeService([]))
+    cancelled = []
+    monkeypatch.setattr(app._conversations, "cancel_run", lambda run_id: cancelled.append(run_id) or True)
+    async with app.run_test() as pilot:
+        app._active_run_id = "run-1"
+        app.query_one("#input", Input).value = "/stop"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert cancelled == ["run-1"]
+        assert any("已停止当前回复" in _static_text(w) for w in app.query("#messages Static"))
+
+
+async def test_stop_command_without_active_run_is_informational():
+    app = ChatApp(service=_FakeService([]))
+    async with app.run_test() as pilot:
+        app.query_one("#input", Input).value = "/stop"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert any("当前没有运行中的回复" in _static_text(w) for w in app.query("#messages Static"))
+
+
 async def test_submit_streams_assistant_reply():
     events = [
         {"type": "chunk", "text": "你好"},

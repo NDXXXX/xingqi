@@ -88,6 +88,9 @@ class ConversationService:
     def cancel_run(self, run_id: str) -> bool:
         return active_runs.cancel(run_id)
 
+    def cancel_conversation_run(self, conversation_id: str) -> bool:
+        return active_runs.cancel_conversation(conversation_id)
+
     def local_entry_state(self, conversation_id: str | None) -> tuple[str | None, str | None, list[str]]:
         title = None
         with self.session_factory() as db:

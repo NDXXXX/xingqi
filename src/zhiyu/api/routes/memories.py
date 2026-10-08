@@ -11,6 +11,10 @@ from zhiyu.application.memories import MemoryService
 def build_memories_router(memories: MemoryService) -> APIRouter:
     router = APIRouter()
 
+    @router.get("/api/memory-index-status")
+    async def memory_index_status():
+        return memories.index_status()
+
     @router.get("/api/memory-consolidation-runs")
     async def consolidation_runs(limit: int = Query(default=5, ge=1, le=20)):
         return memories.consolidation_runs(limit)

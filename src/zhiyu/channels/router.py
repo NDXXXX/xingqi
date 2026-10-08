@@ -40,3 +40,13 @@ class ChannelRouter:
             conversation_type=event.conversation_type,
         )
         return "已开启新的对话。"
+
+    async def stop_session(self, message: InboundEvent | IncomingMessage) -> str:
+        event = message.to_event() if isinstance(message, IncomingMessage) else message
+        stopped = self.chat_service.cancel_channel_run(
+            event.channel,
+            event.conversation_id,
+            channel_config_id=event.channel_config_id,
+            conversation_type=event.conversation_type,
+        )
+        return "已停止当前回复。" if stopped else "当前会话没有运行中的回复。"

@@ -61,6 +61,7 @@ class ChatApp(App):
         self._continuing_title = continuing_title
         self._goals = goals or []
         self._first_turn = True
+        self._active_run_id: str | None = None
 
     def compose(self) -> ComposeResult:
         yield VerticalScroll(id="messages")
@@ -115,7 +116,13 @@ class ChatApp(App):
         if text == "/exit":
             self.exit()
         elif text == "/help":
-            await self._add(Static("命令：/new /history /model [name] /character [id] /memory /remember <type> <content> /forget <id> /verbose [on|full|off] /tools /clear /exit"))
+            await self._add(Static("命令：/new /stop /history /model [name] /character [id] /memory /remember <type> <content> /forget <id> /verbose [on|full|off] /tools /clear /exit"))
+        elif text == "/stop":
+            stopped = (
+                self._active_run_id is not None
+                and self._conversations.cancel_run(self._active_run_id)
+            )
+            await self._add(Static("已停止当前回复。" if stopped else "当前没有运行中的回复。"))
         elif text == "/new":
             self._conversation_id = None
             await self._add(Static("已开始新会话"))
@@ -222,7 +229,9 @@ class ChatApp(App):
                     model=self._model,
                 )
             ):
-                if event["type"] == "tool":
+                if event["type"] == "run":
+                    self._active_run_id = event["run_id"]
+                elif event["type"] == "tool":
                     for line, color in _tool_lines(event, self._verbose):
                         tag = "red" if color == RED else "dim"
                         tool_markup.append(f"[{tag}]{line}[/{tag}]")
@@ -239,5 +248,6 @@ class ChatApp(App):
         except Exception as exc:
             md.update(f"运行失败：{exc}")
         finally:
+            self._active_run_id = None
             messages.scroll_end(animate=False)
             self._set_status("idle")

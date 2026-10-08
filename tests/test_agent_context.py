@@ -12,6 +12,7 @@ from zhiyu.core.agent.context import (
     compact_messages,
     trim_messages,
     with_agent_context,
+    with_agent_context_async,
 )
 from zhiyu.infrastructure.database import models  # noqa: F401
 from zhiyu.infrastructure.database.db import Base
@@ -159,6 +160,39 @@ def test_context_compaction_persists_derived_summary():
     assert summary is not None
     assert "很早" in summary.content
     assert summary.source_message_count == 2
+    db.close()
+
+
+async def test_async_context_uses_semantic_summary_when_checkpoint_advances():
+    db = _session()
+    identity = IdentityRepository().local(db)
+    conversation = ConversationRepository().create(
+        db, title="semantic summary", channel="local", identity_id=identity.id
+    )
+    calls = []
+
+    async def summarize(deterministic_summary):
+        calls.append(deterministic_summary)
+        return "用户提出了一个长期事项，知语给出过初步答复。"
+
+    compacted = await with_agent_context_async(
+        db,
+        conversation,
+        "后续问题",
+        [
+            {"role": "user", "content": "很早的问题" * 60},
+            {"role": "assistant", "content": "很早的回答" * 60},
+            {"role": "user", "content": "后续问题"},
+        ],
+        context_window=420,
+        max_output_tokens=100,
+        summary_generator=summarize,
+    )
+
+    checkpoint = db.get(models.ConversationSummary, conversation.id)
+    assert calls and "很早" in calls[0]
+    assert checkpoint.content == "用户提出了一个长期事项，知语给出过初步答复。"
+    assert any("用户提出了一个长期事项" in item.get("content", "") for item in compacted)
     db.close()
 
 

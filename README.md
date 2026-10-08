@@ -40,6 +40,8 @@ uv run zhiyu chat
 uv run zhiyu chat "帮我整理今天的待办"
 ```
 
+TUI 中输入 `/stop` 可停止当前回复，输入 `/help` 查看其他命令。
+
 支持的 Provider 类型：`deepseek`、`openai`、`anthropic`、`minimax`、`kimi`。添加 Provider 时可用 `--base-url` 指定兼容 API 地址。执行 `uv run zhiyu --help` 或 `uv run zhiyu <命令> --help` 查看全部选项。
 
 ## Web UI

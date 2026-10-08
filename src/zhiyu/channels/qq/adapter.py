@@ -89,7 +89,7 @@ class QQAdapter(ChannelAdapter):
                 DedupStage(self._is_duplicate),
                 NormalizeStage(self._normalize_event),
                 SessionStage(),
-                CommandStage({"/new": self._new_session}),
+                CommandStage({"/new": self._new_session, "/stop": self._stop_session}),
                 AgentStage(self.router.handle),
                 RenderStage(),
                 PersistResponseStage(self._persist_response),
@@ -203,28 +203,34 @@ class QQAdapter(ChannelAdapter):
         event = self._to_event(data)
         if event is None:
             return
+        if event.text.strip() == "/stop":
+            await self._execute_event(event)
+            return
         lock_key = ":".join(
             (event.account_id, event.conversation_type, event.conversation_id)
         )
         lock = self._conversation_locks.setdefault(lock_key, asyncio.Lock())
         async with lock:
-            try:
-                result = await self._pipeline.execute(event)
-            except Exception as exc:
-                if self.reliability is not None and event.event_id in self._claimed_event_ids:
-                    self.reliability.retry_or_fail(
-                        event.event_id, str(exc), retryable=not isinstance(exc, ValueError)
-                    )
-                raise
-            else:
-                if (
-                    self.reliability is not None
-                    and result.data.get("dedup_checked")
-                    and not result.data.get("duplicate")
-                ):
-                    self.reliability.complete(event.event_id)
-            finally:
-                self._claimed_event_ids.discard(event.event_id)
+            await self._execute_event(event)
+
+    async def _execute_event(self, event: InboundEvent) -> None:
+        try:
+            result = await self._pipeline.execute(event)
+        except Exception as exc:
+            if self.reliability is not None and event.event_id in self._claimed_event_ids:
+                self.reliability.retry_or_fail(
+                    event.event_id, str(exc), retryable=not isinstance(exc, ValueError)
+                )
+            raise
+        else:
+            if (
+                self.reliability is not None
+                and result.data.get("dedup_checked")
+                and not result.data.get("duplicate")
+            ):
+                self.reliability.complete(event.event_id)
+        finally:
+            self._claimed_event_ids.discard(event.event_id)
 
     def _to_event(self, data: dict) -> InboundEvent | None:
         if data.get("post_type") != "message":
@@ -364,6 +370,9 @@ class QQAdapter(ChannelAdapter):
     async def _new_session(self, event: InboundEvent) -> str:
         return await self.router.new_session(event)
 
+    async def _stop_session(self, event: InboundEvent) -> str:
+        return await self.router.stop_session(event)
+
     def _is_duplicate(self, event: InboundEvent) -> bool:
         if self.reliability is None:
             return False
@@ -429,7 +438,7 @@ class QQAdapter(ChannelAdapter):
                 PolicyStage(self._is_allowed),
                 NormalizeStage(self._normalize_event),
                 SessionStage(),
-                CommandStage({"/new": self._new_session}),
+                CommandStage({"/new": self._new_session, "/stop": self._stop_session}),
                 AgentStage(self.router.handle),
                 RenderStage(),
                 PersistResponseStage(self._persist_response),

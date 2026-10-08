@@ -1,8 +1,11 @@
 """Agent 图 tool-calling 循环测试（用 fake provider，不碰网络/DB）。"""
 
+import asyncio
+
 import httpx
 
 from zhiyu.core.agent.runtime import run_agent, run_agent_stream
+from zhiyu.core.agent.run_manager import ActiveRunManager
 from zhiyu.core.providers.base import AIProvider, LLMResponse, ToolCall
 from zhiyu.core.tools.registry import default_registry
 
@@ -66,6 +69,58 @@ class StreamingProvider(PlainProvider):
         yield "直接"
         yield "回答"
         yield LLMResponse(content="直接回答", tool_calls=[])
+
+
+async def test_active_run_manager_cancels_only_matching_conversation():
+    manager = ActiveRunManager()
+    started = {"one": asyncio.Event(), "two": asyncio.Event()}
+    cancelled = {"one": asyncio.Event(), "two": asyncio.Event()}
+
+    async def running(run_id, conversation_id):
+        manager.register(run_id, conversation_id)
+        started[conversation_id].set()
+        try:
+            await asyncio.Future()
+        finally:
+            cancelled[conversation_id].set()
+            manager.unregister(run_id)
+
+    one = asyncio.create_task(running("run-1", "one"))
+    two = asyncio.create_task(running("run-2", "two"))
+    await asyncio.gather(started["one"].wait(), started["two"].wait())
+
+    assert manager.cancel_conversation("one") is True
+    assert manager.cancel_conversation("missing") is False
+    await asyncio.wait_for(cancelled["one"].wait(), 1)
+    assert cancelled["two"].is_set() is False
+    two.cancel()
+    await asyncio.gather(one, two, return_exceptions=True)
+
+
+async def test_active_run_manager_cancels_matching_external_channel_session():
+    manager = ActiveRunManager()
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def running():
+        manager.register(
+            "qq-run",
+            "internal-conversation",
+            ("qq", "config-1", "group", "group-7"),
+        )
+        started.set()
+        try:
+            await asyncio.Future()
+        finally:
+            cancelled.set()
+            manager.unregister("qq-run")
+
+    task = asyncio.create_task(running())
+    await started.wait()
+    assert manager.cancel_channel_session("qq", "config-1", "private", "user-1") is False
+    assert manager.cancel_channel_session("qq", "config-1", "group", "group-7") is True
+    await asyncio.wait_for(cancelled.wait(), 1)
+    await asyncio.gather(task, return_exceptions=True)
 
 
 async def test_streaming_agent_forwards_provider_chunks():

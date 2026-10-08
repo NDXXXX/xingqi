@@ -6,11 +6,12 @@ import {
 } from "react";
 import { createRoot } from "react-dom/client";
 import { deriveOverview, type ApiResult } from "./overview";
-import { errorText, post, request } from "./api";
+import { errorText, request } from "./api";
 import { StateCard } from "./components/StateCard";
 import { ChatPage } from "./pages/ChatPage";
 import { MemoryPage } from "./pages/MemoryPage";
 import { useChatSession } from "./hooks/useChatSession";
+import { useManagementActions } from "./hooks/useManagementActions";
 import { OverviewPage } from "./pages/OverviewPage";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
 import { ProvidersPage } from "./pages/ProvidersPage";
@@ -69,7 +70,6 @@ function App() {
   const [pageRevision, setPageRevision] = useState(0);
   const [pageError, setPageError] = useState("");
   const conversationLoadRef = useRef(0);
-  const dialog = window.zhiyuDialogs;
 
   const refreshOverview = useCallback(async () => {
     setOverviewLoading(true);
@@ -122,6 +122,9 @@ function App() {
   }, []);
   const onChatErrorClear = useCallback(() => setPageError(""), []);
   const reportPageError = useCallback((error: string) => setPageError(error), []);
+  const closeMobileMenu = useCallback(() => {
+    document.querySelector(".sidebar")?.classList.remove("menu-open");
+  }, []);
   const {
     messages,
     setMessages,
@@ -141,6 +144,7 @@ function App() {
   });
   const openConversation = useCallback(
     async (id: string, title?: string) => {
+      closeMobileMenu();
       await cancelRun();
       setActivity("");
       const loadId = ++conversationLoadRef.current;
@@ -163,9 +167,10 @@ function App() {
           })),
         );
     },
-    [cancelRun],
+    [cancelRun, closeMobileMenu],
   );
   const startNewChat = useCallback(async () => {
+    closeMobileMenu();
     await cancelRun();
     conversationLoadRef.current += 1;
     setConversationId(null);
@@ -174,9 +179,10 @@ function App() {
     setActivity("");
     setPage("chat");
     history.pushState({}, "", "/?page=chat");
-  }, [cancelRun, clearMessages]);
+  }, [cancelRun, clearMessages, closeMobileMenu]);
   const navigate = useCallback(
     async (target: Page) => {
+      closeMobileMenu();
       if (busy && target !== "chat") await cancelRun();
       setPage(target);
       setPageError("");
@@ -187,13 +193,14 @@ function App() {
         target === "overview" ? "/" : `/?page=${target}`,
       );
     },
-    [busy, cancelRun],
+    [busy, cancelRun, closeMobileMenu],
   );
 
   useEffect(() => {
     void refreshOverview();
     void refreshConversations();
     const onPop = () => {
+      closeMobileMenu();
       const params = new URLSearchParams(location.search);
       const target = (params.get("page") as Page) || "overview";
       const id = params.get("conversation");
@@ -224,7 +231,7 @@ function App() {
     };
     addEventListener("popstate", onPop);
     return () => removeEventListener("popstate", onPop);
-  }, [refreshOverview, refreshConversations, cancelRun, clearMessages]);
+  }, [refreshOverview, refreshConversations, cancelRun, clearMessages, closeMobileMenu]);
   useEffect(() => {
     const id = new URLSearchParams(location.search).get("conversation");
     if (id)
@@ -234,121 +241,22 @@ function App() {
     // URL synchronization is intentionally triggered only by the initial/deep-linked conversation.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  async function act(action: () => Promise<unknown>, refresh = true) {
+  const act = useCallback(async (action: () => Promise<unknown>, refresh = true) => {
     try {
       await action();
       if (refresh) await refreshOverview();
     } catch (error) {
       void window.zhiyuDialogs.alert(errorText(error), "操作失败");
     }
-  }
-  async function addProvider() {
-    const values = await dialog.form(
-      "添加模型服务",
-      "API Key 不会再次显示。",
-      [
-        {
-          name: "name",
-          label: "Provider 名称",
-          required: true,
-          placeholder: "例如 deepseek",
-        },
-        {
-          name: "provider_type",
-          label: "类型",
-          type: "select",
-          value: "deepseek",
-          options: ["deepseek", "minimax", "kimi", "openai", "anthropic"].map(
-            (value) => ({ value, label: value }),
-          ),
-        },
-        { name: "api_key", label: "API Key", type: "password" },
-        { name: "api_key_env", label: "环境变量名" },
-        { name: "base_url", label: "Base URL", type: "url" },
-      ],
-      "保存 Provider",
-    );
-    if (!values) return;
-    if (values.api_key && values.api_key_env) {
-      await dialog.alert("API Key 与环境变量只能填写一个。", "配置无效");
-      return;
-    }
-    await act(async () => {
-      await request(
-        "/api/providers",
-        post("POST", {
-          ...values,
-          api_key: values.api_key || null,
-          api_key_env: values.api_key_env || null,
-          base_url: values.base_url || null,
-        }),
-      );
-      setPageRevision((value) => value + 1);
-    });
-  }
-  async function addMcp() {
-    const values = await dialog.form(
-      "添加 MCP Server",
-      "新服务默认停用。",
-      [
-        { name: "name", label: "名称", required: true },
-        {
-          name: "transport",
-          label: "传输方式",
-          type: "select",
-          value: "stdio",
-          options: [
-            { value: "stdio", label: "stdio" },
-            { value: "streamable_http", label: "Streamable HTTP" },
-            { value: "sse", label: "SSE" },
-          ],
-        },
-        { name: "command", label: "命令（stdio）" },
-        { name: "args", label: "参数 JSON 数组", value: "[]" },
-        { name: "url", label: "远程 URL" },
-      ],
-      "添加",
-    );
-    if (!values) return;
-    await act(async () => {
-      const transport = String(values.transport);
-      await request(
-        "/api/mcp/servers",
-        post("POST", {
-          name: values.name,
-          transport,
-          command: transport === "stdio" ? values.command : null,
-          args: JSON.parse(String(values.args || "[]")),
-          url: transport === "stdio" ? null : values.url,
-          enabled: false,
-        }),
-      );
-      setPageRevision((value) => value + 1);
-    });
-  }
-  async function installSkill() {
-    const source = await dialog.prompt(
-      "本地目录路径或 HTTPS Git 仓库地址",
-      "",
-      { title: "安装 Skill", placeholder: "https://github.com/owner/repo" },
-    );
-    if (!source) return;
-    await act(async () => {
-      const preview = await request<Item>(
-        "/api/skills/preview",
-        post("POST", { source }),
-      );
-      if (
-        !(await dialog.confirm(
-          `即将安装 ${preview.name}（${preview.files?.length || 0} 个文件）。\n${(preview.warnings || []).join("\n")}`,
-          "确认安装",
-        ))
-      )
-        return;
-      await request("/api/skills/install", post("POST", { source }));
-      setPageRevision((value) => value + 1);
-    });
-  }
+  }, [refreshOverview]);
+  const onManagementChanged = useCallback(
+    () => setPageRevision((value) => value + 1),
+    [],
+  );
+  const { addProvider, addMcp, installSkill } = useManagementActions(
+    act,
+    onManagementChanged,
+  );
 
   const pageBody = (() => {
     if (page === "overview")

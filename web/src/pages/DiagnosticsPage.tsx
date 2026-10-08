@@ -13,6 +13,8 @@ export function DiagnosticsPage({ reloadKey, onLoadError, act }: Props) {
   const [events, setEvents] = useState<Item[]>([]);
   const [deliveries, setDeliveries] = useState<Item[]>([]);
   const [pageLoading, setPageLoading] = useState(true);
+  const [memoryIndex, setMemoryIndex] = useState<Item | null>(null);
+  const [memoryIndexError, setMemoryIndexError] = useState("");
   const dialog = window.zhiyuDialogs;
   useEffect(() => {
     let alive = true;
@@ -32,13 +34,51 @@ export function DiagnosticsPage({ reloadKey, onLoadError, act }: Props) {
       .finally(() => {
         if (alive) setPageLoading(false);
       });
+    void request<Item>("/api/memory-index-status")
+      .then((status) => {
+        if (alive) {
+          setMemoryIndex(status);
+          setMemoryIndexError("");
+        }
+      })
+      .catch((error) => {
+        if (alive) setMemoryIndexError(errorText(error));
+      });
     return () => {
       alive = false;
     };
   }, [onLoadError, reloadKey]);
+  const indexLabels: Record<string, string> = {
+    ready: "正常",
+    stale: "索引陈旧",
+    indexing: "正在同步",
+    failed: "同步失败",
+    not_indexed: "尚未建立",
+  };
   return (
     <div className="page-content">
       {pageLoading && <div className="loading-line">正在加载…</div>}
+      <article className="panel">
+        <div className="panel-heading">
+          <div>
+            <span className="eyebrow">MEMORY INDEX</span>
+            <h2>长期记忆索引</h2>
+          </div>
+        </div>
+        {memoryIndexError ? (
+          <p role="alert">索引状态读取失败：{memoryIndexError}</p>
+        ) : memoryIndex ? (
+          <div className="table-row">
+            <strong>{indexLabels[memoryIndex.status] || "状态未知"}</strong>
+            <small>
+              最近成功：{memoryIndex.last_success_at ? stamp(memoryIndex.last_success_at) : "暂无记录"}
+            </small>
+            {memoryIndex.error && <small>{memoryIndex.error}</small>}
+          </div>
+        ) : (
+          <p className="muted">正在读取索引状态…</p>
+        )}
+      </article>
       <article className="panel">
         <div className="panel-heading">
           <div>
