@@ -408,7 +408,7 @@ function App() {
       <aside className="sidebar">
         <div className="sidebar-content">
           <div className="brand">
-            <span className="brand-mark">星</span>
+            <img className="brand-mark" src="/favicon.png" alt="" />
             <div>
               <strong>星栖</strong>
               <small>Personal Agent</small>

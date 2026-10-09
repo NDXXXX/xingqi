@@ -140,7 +140,7 @@ export function OverviewPage({ overview, overviewLoading, refreshOverview, navig
         <div className="dashboard-top">
           <div className="dashboard-side">
             <article className="identity-card panel">
-              <div className="identity-mark">星</div>
+              <img className="identity-mark" src="/favicon.png" alt="" />
               <div>
                 <strong>星栖</strong>
                 <small>Personal Agent</small>
