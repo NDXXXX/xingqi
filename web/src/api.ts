@@ -7,7 +7,7 @@ export const request = async <T,>(
     const body = await response.json().catch(() => ({}));
     throw new Error(body.detail || `请求失败：${response.status}`);
   }
-  return response.json() as Promise<T>;
+  return (response.status === 204 ? undefined : await response.json()) as T;
 };
 
 export const post = (method: string, body?: unknown): RequestInit => ({

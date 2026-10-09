@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -20,7 +20,7 @@ class Conversation(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     title: Mapped[str] = mapped_column(String(255), default="New Chat")
-    character_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    character_id: Mapped[str | None] = mapped_column(ForeignKey("characters.id", ondelete="RESTRICT"), nullable=True)
     channel: Mapped[str] = mapped_column(String(32), default="local")
     channel_config_id: Mapped[str | None] = mapped_column(
         ForeignKey("channel_configs.id", ondelete="SET NULL"), nullable=True, index=True
@@ -124,11 +124,13 @@ class Character(Base):
 
 class Memory(Base):
     __tablename__ = "memories"
-    __table_args__ = (Index("ix_memories_identity_status", "identity_id", "status"),)
+    __table_args__ = (Index("ix_memories_identity_status", "identity_id", "status"),
+                      Index("ix_memories_agent_status", "identity_id", "character_id", "status"))
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     user_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     identity_id: Mapped[str | None] = mapped_column(ForeignKey("identities.id"), nullable=True, index=True)
+    character_id: Mapped[str | None] = mapped_column(ForeignKey("characters.id", ondelete="RESTRICT"), nullable=True)
     shared: Mapped[bool] = mapped_column(Boolean, default=False)
     type: Mapped[str] = mapped_column(String(32))
     content: Mapped[str] = mapped_column(Text)
@@ -205,6 +207,7 @@ class MemoryJob(Base):
     provider_id: Mapped[str | None] = mapped_column(
         ForeignKey("providers.id", ondelete="SET NULL"), nullable=True
     )
+    character_id: Mapped[str | None] = mapped_column(ForeignKey("characters.id", ondelete="RESTRICT"), nullable=True)
     model: Mapped[str] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(32), default="pending")
     attempts: Mapped[int] = mapped_column(Integer, default=0)
@@ -244,6 +247,7 @@ class MemoryEmbedding(Base):
     memory_id: Mapped[str] = mapped_column(
         ForeignKey("memories.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    character_id: Mapped[str | None] = mapped_column(ForeignKey("characters.id", ondelete="RESTRICT"), nullable=True)
     model: Mapped[str] = mapped_column(String(255))
     vector_json: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
@@ -317,36 +321,6 @@ class MemoryRecallEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
-class StandingIntent(Base):
-    __tablename__ = "standing_intents"
-    __table_args__ = (
-        Index("ix_standing_intents_due", "status", "due_at"),
-    )
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    identity_id: Mapped[str] = mapped_column(
-        ForeignKey("identities.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    source_message_id: Mapped[str] = mapped_column(
-        ForeignKey("messages.id", ondelete="CASCADE"), unique=True, nullable=False
-    )
-    source_conversation_id: Mapped[str] = mapped_column(
-        ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False
-    )
-    kind: Mapped[str] = mapped_column(String(16))
-    topic: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    content: Mapped[str] = mapped_column(Text)
-    channel: Mapped[str] = mapped_column(String(32))
-    channel_config_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    target_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    due_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    expires_at: Mapped[datetime] = mapped_column(DateTime)
-    last_fired_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    fire_count: Mapped[int] = mapped_column(Integer, default=0)
-    status: Mapped[str] = mapped_column(String(16), default="active")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-
-
 class MemoryMutation(Base):
     __tablename__ = "memory_mutations"
     __table_args__ = (
@@ -386,6 +360,7 @@ class Identity(Base):
     channel: Mapped[str] = mapped_column(String(32))
     external_user_id: Mapped[str] = mapped_column(String(255))
     display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    memory_reset_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -514,9 +489,14 @@ class ChannelMediaAsset(Base):
 
 class McpServerConfig(Base):
     __tablename__ = "mcp_server_configs"
+    __table_args__ = (
+        Index("uq_mcp_agent_name", "character_id", "name", unique=True, sqlite_where=text("character_id IS NOT NULL")),
+        Index("uq_mcp_default_name", "name", unique=True, sqlite_where=text("character_id IS NULL")),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    name: Mapped[str] = mapped_column(String(255), unique=True)
+    name: Mapped[str] = mapped_column(String(255))
+    character_id: Mapped[str | None] = mapped_column(ForeignKey("characters.id", ondelete="RESTRICT"), nullable=True)
     transport: Mapped[str] = mapped_column(String(32), default="stdio")
     command: Mapped[str | None] = mapped_column(String(500), nullable=True)
     args_json: Mapped[str] = mapped_column(Text, default="[]")
@@ -567,6 +547,14 @@ class InstalledSkill(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     trashed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class CharacterSkill(Base):
+    __tablename__ = "character_skills"
+
+    character_id: Mapped[str] = mapped_column(ForeignKey("characters.id", ondelete="CASCADE"), primary_key=True)
+    skill_name: Mapped[str] = mapped_column(String(255), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
 class AgentRun(Base):

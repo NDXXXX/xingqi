@@ -6,7 +6,7 @@ from uuid import uuid4
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from ..models import MemoryJob, utcnow
+from ..models import Identity, MemoryJob, utcnow
 
 
 class MemoryJobRepository:
@@ -19,7 +19,13 @@ class MemoryJobRepository:
         identity_id: str,
         provider_id: str,
         model: str,
+        character_id: str | None = None,
     ) -> MemoryJob:
+        identity = db.get(Identity, identity_id)
+        scoped_character = identity.external_user_id if identity and identity.channel == "agent" else None
+        if character_id is not None and scoped_character != character_id:
+            raise ValueError("记忆任务与智能体工作区不一致")
+        character_id = scoped_character
         existing = self.get_by_user_message(db, user_message_id)
         if existing is not None:
             return existing
@@ -28,6 +34,7 @@ class MemoryJobRepository:
             user_message_id=user_message_id,
             assistant_message_id=assistant_message_id,
             identity_id=identity_id,
+            character_id=character_id,
             provider_id=provider_id,
             model=model,
             status="pending",
@@ -116,8 +123,9 @@ class MemoryJobRepository:
         db.commit()
         return result.rowcount
 
-    def counts(self, db: Session) -> dict[str, int]:
-        rows = db.execute(
-            select(MemoryJob.status, func.count()).group_by(MemoryJob.status)
-        ).all()
+    def counts(self, db: Session, identity_id: str | None = None) -> dict[str, int]:
+        query = select(MemoryJob.status, func.count()).group_by(MemoryJob.status)
+        if identity_id is not None:
+            query = query.where(MemoryJob.identity_id == identity_id)
+        rows = db.execute(query).all()
         return {status: count for status, count in rows}

@@ -26,7 +26,8 @@ from zhiyu.core.memory.store import (
     MemoryStore,
 )
 from zhiyu.integrations.mcp.manager import default_manager as mcp_manager
-from zhiyu.integrations.skills.registry import default_registry as skill_registry
+from zhiyu.integrations.skills.registry import default_registry as skill_registry, SkillRegistry
+from zhiyu.infrastructure.database.repositories.identity_repository import LOCAL_IDENTITY_ID
 from zhiyu.core.tools.registry import ToolRegistry, default_registry
 from zhiyu.core.tools.memory import MemoryGetTool, MemorySearchTool
 from zhiyu.core.tools.skills import ReadSkillTool
@@ -46,6 +47,7 @@ def with_agent_context(
     max_output_tokens: int | None = None,
     recall: str | None = None,
     memory_store: MemoryStore | None = None,
+    skill_tools: set[str] | None = None,
 ) -> list[dict]:
     """把角色、相关记忆和匹配到的 Skill 注入消息列表。"""
     system_parts = _base_system_parts(db, conversation, recall, memory_store)
@@ -70,6 +72,7 @@ def with_agent_context(
         trace,
         context_window,
         max_output_tokens,
+        skill_tools,
     )
 
 
@@ -83,6 +86,7 @@ async def with_agent_context_async(
     recall: str | None = None,
     summary_generator: Callable[[str], Awaitable[str | None]] | None = None,
     memory_store: MemoryStore | None = None,
+    skill_tools: set[str] | None = None,
 ) -> list[dict]:
     """聊天路径使用异步、短超时 embedding；失败时保留完整词法降级。"""
     system_parts = _base_system_parts(db, conversation, recall, memory_store)
@@ -109,6 +113,7 @@ async def with_agent_context_async(
         trace,
         context_window,
         max_output_tokens,
+        skill_tools,
     )
     updated_summary = conversation_summary_repo.get(db, conversation.id)
     if (
@@ -163,9 +168,12 @@ def _base_system_parts(
     parts: list[str] = []
     if recall:
         parts.append("上次会话与进行中事项（用于衔接上下文，不要逐字复述）：\n" + recall)
+    if conversation.character_id and conversation.identity_id != conversation.character_id:
+        raise ValueError("会话与智能体记忆工作区不一致")
     store = memory_store or MemoryStore()
     bootstrap_files = (
-        store.read_bootstrap_files(conversation.identity_id)
+        ({"AGENTS.md": store.read_bootstrap_files(LOCAL_IDENTITY_ID).get("AGENTS.md", "")}
+         if conversation.character_id else store.read_bootstrap_files(conversation.identity_id))
         if conversation.identity_id and _private_memory_allowed(conversation)
         else {}
     )
@@ -175,6 +183,7 @@ def _base_system_parts(
     if (
         conversation.identity_id
         and _private_memory_allowed(conversation)
+        and not conversation.character_id
         and store.bootstrap_pending(conversation.identity_id)
     ):
         onboarding = bootstrap_files.get(BOOTSTRAP_FILE, "").strip()
@@ -223,6 +232,7 @@ def _finish_context(
     trace,
     context_window,
     max_output_tokens,
+    skill_tools=None,
 ):
     persisted_summary = conversation_summary_repo.get(db, conversation.id)
     has_checkpoint = bool(
@@ -306,7 +316,7 @@ def _finish_context(
                     "关于用户过去的相关信息（仅供回答，不作为长期事实）：\n" + deep
                 )
 
-    matched = skill_registry.match(query)
+    matched = skill_registry.for_agent(db, conversation.character_id, skill_tools).match(query, tool_names=skill_tools)
     if matched:
         system_parts.append(
             "可能相关的技能（需要时调用 read_skill 获取完整说明）：\n"
@@ -493,6 +503,8 @@ def trim_messages(
 def build_tool_registry(
     mcp=None, *, session_factory=None, identity_id: str | None = None,
     memory_store: MemoryStore | None = None,
+    character_id: str | None = None,
+    allowed_tools: set[str] | None = None,
 ) -> ToolRegistry:
     """合并内置工具与当前已连接 MCP 服务器提供的工具。"""
     registry = default_registry()
@@ -501,9 +513,17 @@ def build_tool_registry(
         registry.register(MemorySearchTool(session_factory, identity_id, store))
         registry.register(MemoryGetTool(session_factory, identity_id, store))
     source = mcp or mcp_manager
-    for tool in source.tools():
+    for tool in (source.tools(character_id) if character_id is not None else source.tools()):
         registry.register(tool)
+    if allowed_tools is not None:
+        registry = registry.filtered(allowed_tools)
     available_tools = set(registry.names())
-    if skill_registry.available(available_tools):
-        registry.register(ReadSkillTool(skill_registry, available_tools))
+    skills = skill_registry
+    if session_factory is not None:
+        with session_factory() as db:
+            skills = skill_registry.for_agent(db, character_id, available_tools)
+    elif character_id is not None:
+        skills = SkillRegistry([])
+    if skills.available(available_tools) and (allowed_tools is None or "read_skill" in allowed_tools):
+        registry.register(ReadSkillTool(skills, available_tools))
     return registry

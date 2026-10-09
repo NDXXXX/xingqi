@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
-import { errorText, post, request } from "../api";
+import { useContext, useEffect, useState } from "react";
+import { errorText, post } from "../api";
 import { StateCard } from "../components/StateCard";
 import { stamp } from "../format";
+import { AgentScope, useAgentRequest } from "../agentScope";
 import type { Item } from "../types";
 
 type Props = {
@@ -12,6 +13,8 @@ type Props = {
 };
 
 export function SkillsPage({ reloadKey, onLoadError, act, installSkill }: Props) {
+  const request = useAgentRequest();
+  const characterId = useContext(AgentScope);
   const [skills, setSkills] = useState<Item[]>([]);
   const [trash, setTrash] = useState<Item[]>([]);
   const [pageLoading, setPageLoading] = useState(true);
@@ -37,12 +40,12 @@ export function SkillsPage({ reloadKey, onLoadError, act, installSkill }: Props)
     return () => {
       alive = false;
     };
-  }, [onLoadError, reloadKey]);
+  }, [onLoadError, reloadKey, request]);
   return (
     <div className="page-content">
       {pageLoading && <div className="loading-line">正在加载…</div>}
       <div className="notice">
-        Skill 内容按需读取；安装不会执行其中代码或自动安装依赖。
+        {characterId ? "选择要关联给当前智能体的 Skill。启用和停用只影响当前智能体。" : "Skill 内容按需读取；安装不会执行其中代码或自动安装依赖。"}
       </div>
       {skills.length ? (
         <div className="manage-list">
@@ -72,7 +75,7 @@ export function SkillsPage({ reloadKey, onLoadError, act, installSkill }: Props)
                 {item.modified ? " · 本地内容有修改" : ""}
               </p>
               <div className="card-actions">
-                {item.managed && (
+                {(item.managed || characterId) && (
                   <>
                     <button
                       className="quiet"
@@ -88,7 +91,7 @@ export function SkillsPage({ reloadKey, onLoadError, act, installSkill }: Props)
                     >
                       {item.enabled ? "停用" : "启用"}
                     </button>
-                    <button
+                    {!characterId && <button
                       className="quiet"
                       onClick={() =>
                         void act(async () => {
@@ -131,14 +134,14 @@ export function SkillsPage({ reloadKey, onLoadError, act, installSkill }: Props)
                       }
                     >
                       检查更新
-                    </button>
+                    </button>}
                     <button
                       className="danger-button"
                       onClick={() =>
                         void act(async () => {
                           if (
                             !(await dialog.confirm(
-                              `将 ${item.name} 移入回收站？`,
+                              characterId ? `移除 ${item.name} 与当前智能体的关联？` : `将 ${item.name} 移入回收站？`,
                             ))
                           )
                             return;
@@ -151,7 +154,7 @@ export function SkillsPage({ reloadKey, onLoadError, act, installSkill }: Props)
                         })
                       }
                     >
-                      移入回收站
+                      {characterId ? "移除关联" : "移入回收站"}
                     </button>
                   </>
                 )}
@@ -172,7 +175,7 @@ export function SkillsPage({ reloadKey, onLoadError, act, installSkill }: Props)
           />
         )
       )}
-      <article className="panel">
+      {!characterId && <article className="panel">
         <div className="panel-heading">
           <div>
             <span className="eyebrow">TRASH</span>
@@ -203,7 +206,7 @@ export function SkillsPage({ reloadKey, onLoadError, act, installSkill }: Props)
           </div>
         ))}
         {trash.length === 0 && <p className="muted">回收站为空</p>}
-      </article>
+      </article>}
     </div>
   );
 }

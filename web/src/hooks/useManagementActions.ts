@@ -1,5 +1,6 @@
 import { useCallback } from "react";
-import { post, request } from "../api";
+import { agentRequest } from "../agentScope";
+import { post, request as globalRequest } from "../api";
 import type { Item } from "../types";
 
 type Act = (action: () => Promise<unknown>, refresh?: boolean) => Promise<void>;
@@ -7,8 +8,10 @@ type Act = (action: () => Promise<unknown>, refresh?: boolean) => Promise<void>;
 export function useManagementActions(
   act: Act,
   onChanged: () => void,
+  characterId: string | null = null,
 ) {
   const dialog = window.zhiyuDialogs;
+  const request = agentRequest(characterId);
 
   const addProvider = useCallback(async () => {
     const values = await dialog.form(
@@ -37,7 +40,7 @@ export function useManagementActions(
       return;
     }
     await act(async () => {
-      await request(
+      await globalRequest(
         "/api/providers",
         post("POST", {
           ...values,
@@ -48,7 +51,7 @@ export function useManagementActions(
       );
       onChanged();
     });
-  }, [act, dialog, onChanged]);
+  }, [act, dialog, onChanged, characterId]);
 
   const addMcp = useCallback(async () => {
     const values = await dialog.form(
@@ -89,7 +92,7 @@ export function useManagementActions(
       );
       onChanged();
     });
-  }, [act, dialog, onChanged]);
+  }, [act, dialog, onChanged, characterId]);
 
   const installSkill = useCallback(async () => {
     const source = await dialog.prompt(
@@ -113,7 +116,7 @@ export function useManagementActions(
       await request("/api/skills/install", post("POST", { source }));
       onChanged();
     });
-  }, [act, dialog, onChanged]);
+  }, [act, dialog, onChanged, characterId]);
 
   return { addProvider, addMcp, installSkill };
 }

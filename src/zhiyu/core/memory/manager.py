@@ -13,6 +13,7 @@ from zhiyu.infrastructure.database.models import (
     Memory,
     MemorySource,
     Message,
+    Identity,
     utcnow,
 )
 from zhiyu.infrastructure.database.repositories.memory_repository import MemoryRepository
@@ -101,12 +102,15 @@ class MemoryManager:
         if self.store.assistant_name(identity_id):
             self._identity_bootstrapped.add(identity_id)
             return
+        identity = db.get(Identity, identity_id)
+        reset_at = identity.memory_reset_at if identity else None
         messages = db.scalars(
             select(Message)
             .join(Conversation, Message.conversation_id == Conversation.id)
             .where(
                 Conversation.identity_id == identity_id,
                 Message.role == "user",
+                True if reset_at is None else Message.created_at >= reset_at,
                 (Conversation.channel == "local")
                 | ((Conversation.channel == "qq") & (Conversation.external_conversation_type == "private")),
             )
@@ -151,6 +155,12 @@ class MemoryManager:
         if should_apply is not None and not should_apply():
             return []
 
+        identity = db.get(Identity, identity_id)
+        if identity is not None:
+            db.refresh(identity)
+        source = db.get(Message, user_message_id) if user_message_id else None
+        if source and identity and identity.memory_reset_at and source.created_at < identity.memory_reset_at:
+            return []
         conversation_id = self._conversation_of(db, user_message_id) if user_message_id else None
         if conversation_id and db.scalars(
             select(ForgottenConversation.id).where(

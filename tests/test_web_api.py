@@ -123,6 +123,39 @@ def test_web_chat_stream_and_shared_conversation(tmp_path):
         assert [item["role"] for item in messages] == ["user", "assistant"]
 
 
+def test_web_can_delete_conversation(tmp_path):
+    client, _sessions, _store, provider_id, model_name = make_client(tmp_path)
+    with client:
+        response = client.post(
+            "/api/chat",
+            json={
+                "message": "待删除会话",
+                "provider_id": provider_id,
+                "model": model_name,
+            },
+        )
+        events = [
+            json.loads(line.removeprefix("data: "))
+            for line in response.text.splitlines()
+            if line.startswith("data: ")
+        ]
+        conversation_id = next(
+            item["conversation_id"] for item in events if item["type"] == "done"
+        )
+
+        deleted = client.delete(f"/api/conversations/{conversation_id}")
+
+        assert deleted.status_code == 200
+        assert deleted.json() == {"deleted": True}
+        assert client.get("/api/conversations").json() == []
+        assert client.get(
+            f"/api/conversations/{conversation_id}/messages"
+        ).status_code == 404
+        assert client.delete(
+            f"/api/conversations/{conversation_id}"
+        ).status_code == 404
+
+
 def test_web_memory_list_search_and_edit(tmp_path):
     client, sessions, store, _provider_id, _model_name = make_client(tmp_path)
     created = MemoryService(sessions, store=store).add(

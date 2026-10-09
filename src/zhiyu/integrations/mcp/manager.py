@@ -280,9 +280,9 @@ class McpManager:
         if config is not None:
             self._set_state(key, config, status="stopped", retry_count=0, next_retry_at=None)
 
-    async def reconnect(self, name: str) -> bool:
+    async def reconnect(self, name: str, character_id: str | None = None) -> bool:
         key = next(
-            (key for key, config in self._configs.items() if config.get("name") == name),
+            (key for key, config in self._configs.items() if config.get("name") == name and config.get("character_id") == character_id),
             None,
         )
         if key is None:
@@ -293,11 +293,13 @@ class McpManager:
         wake.set()
         return True
 
-    async def disconnect(self, name: str) -> bool:
+    async def disconnect(self, name: str, character_id: str | None = None) -> bool:
         key = next(
-            (key for key, config in self._configs.items() if config.get("name") == name),
-            name,
+            (key for key, config in self._configs.items() if config.get("name") == name and config.get("character_id") == character_id),
+            None,
         )
+        if key is None:
+            return False
         if key in self._supervisors:
             await self._stop_supervisor(key)
             return True
@@ -367,16 +369,17 @@ class McpManager:
                 tools.append(McpPromptTool(name, connection, prompt))
         return tools
 
-    def tools(self) -> list[AgentTool]:
+    def tools(self, character_id: str | None = None) -> list[AgentTool]:
         out: list[AgentTool] = []
         for key in self._connections:
-            out.extend(self._tools_for(key))
+            if self._configs.get(key, {}).get("character_id") == character_id:
+                out.extend(self._tools_for(key))
         return out
 
-    def connection(self, name: str) -> McpConnection | None:
+    def connection(self, name: str, character_id: str | None = None) -> McpConnection | None:
         key = next(
-            (key for key, config in self._configs.items() if config.get("name") == name),
-            name,
+            (key for key, config in self._configs.items() if config.get("name") == name and config.get("character_id") == character_id),
+            None,
         )
         return self._connections.get(key)
 

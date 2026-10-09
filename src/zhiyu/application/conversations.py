@@ -28,18 +28,20 @@ class ConversationService:
         self.runs = AgentRunRepository()
         self.identities = IdentityRepository()
 
-    def list_conversations(self, query: str | None = None) -> list[dict]:
+    def list_conversations(self, query: str | None = None, *, character_id: str | None = None, scoped: bool = False) -> list[dict]:
         with self.session_factory() as db:
             return [
                 {
                     "id": item.id,
                     "title": item.title,
                     "channel": item.channel,
+                    "character_id": item.character_id,
                     "model_id": item.model_id,
                     "created_at": item.created_at,
                     "updated_at": item.updated_at,
                 }
                 for item in self.conversations.list(db, query)
+                if not scoped or item.character_id == character_id
             ]
 
     def history(self, conversation_id: str) -> list[dict] | None:
@@ -55,6 +57,11 @@ class ConversationService:
                 }
                 for item in self.messages.list_by_conversation(db, conversation_id)
             ]
+
+    def delete_conversation(self, conversation_id: str) -> bool:
+        self.cancel_conversation_run(conversation_id)
+        with self.session_factory() as db:
+            return self.conversations.delete(db, conversation_id)
 
     def run_detail(self, run_id: str) -> dict | None:
         with self.session_factory() as db:

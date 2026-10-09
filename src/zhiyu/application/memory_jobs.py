@@ -8,7 +8,7 @@ from zhiyu.core.memory.indexer import sync_changed_index
 from zhiyu.core.memory.manager import MemoryManager
 from zhiyu.core.providers.router import ProviderRouter, provider_router
 from zhiyu.infrastructure.database.db import SessionLocal
-from zhiyu.infrastructure.database.models import Conversation, Message
+from zhiyu.infrastructure.database.models import Conversation, Identity, Message
 from zhiyu.infrastructure.database.repositories.memory_job_repository import MemoryJobRepository
 from zhiyu.infrastructure.database.repositories.memory_repository import MemoryRepository
 from zhiyu.infrastructure.database.repositories.message_repository import MessageRepository
@@ -140,6 +140,10 @@ class MemoryJobProcessor:
             if user is None:
                 self.jobs.finish(db, job, "cancelled")
                 return "cancelled"
+            identity = db.get(Identity, job.identity_id)
+            if identity and identity.memory_reset_at and user.created_at < identity.memory_reset_at:
+                self.jobs.finish(db, job, "cancelled")
+                return "cancelled"
             if is_forgotten(db, user.conversation_id, job.identity_id):
                 self.jobs.finish(db, job, "cancelled")
                 return "cancelled"
@@ -150,7 +154,11 @@ class MemoryJobProcessor:
             ):
                 self.jobs.finish(db, job, "cancelled")
                 return "cancelled"
-            messages = MessageRepository().list_by_conversation(db, user.conversation_id)
+            if conversation.identity_id != job.identity_id or conversation.character_id != job.character_id:
+                self.jobs.finish(db, job, "cancelled")
+                return "cancelled"
+            messages = [message for message in MessageRepository().list_by_conversation(db, user.conversation_id)
+                        if not identity or not identity.memory_reset_at or message.created_at >= identity.memory_reset_at]
             user_index = next(
                 (index for index, message in enumerate(messages) if message.id == user.id), 0
             )

@@ -94,21 +94,28 @@ class ChannelConfigRepository:
 
 
 class McpConfigRepository:
-    def list(self, db: Session) -> list[McpServerConfig]:
-        return list(db.scalars(select(McpServerConfig).order_by(McpServerConfig.name)))
+    def __init__(self, character_id: str | None = None):
+        self.character_id = character_id
 
-    def list_auto_connect(self, db: Session) -> list[McpServerConfig]:
+    def _scope(self):
+        return McpServerConfig.character_id == self.character_id
+
+    def list(self, db: Session) -> list[McpServerConfig]:
+        return list(db.scalars(select(McpServerConfig).where(self._scope()).order_by(McpServerConfig.name)))
+
+    def list_auto_connect(self, db: Session, *, all_agents: bool = False) -> list[McpServerConfig]:
         return list(
             db.scalars(
                 select(McpServerConfig).where(
                     McpServerConfig.enabled.is_(True),
                     McpServerConfig.auto_connect.is_(True),
+                    True if all_agents else self._scope(),
                 )
             )
         )
 
     def get(self, db: Session, name: str) -> McpServerConfig | None:
-        return db.scalars(select(McpServerConfig).where(McpServerConfig.name == name)).first()
+        return db.scalars(select(McpServerConfig).where(McpServerConfig.name == name, self._scope())).first()
 
     def upsert(
         self,
@@ -124,6 +131,7 @@ class McpConfigRepository:
         if config is None:
             config = McpServerConfig(
                 id=str(uuid4()),
+                character_id=self.character_id,
                 name=name,
                 transport="stdio",
                 command=command,

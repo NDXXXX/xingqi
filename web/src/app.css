@@ -39,6 +39,31 @@
 .sidebar-empty {
   padding: 8px 10px;
 }
+.conversation-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 40px;
+  align-items: center;
+  min-width: 0;
+}
+.conversation-row .conversation {
+  min-width: 0;
+  width: 100%;
+}
+.conversation-delete {
+  width: 40px;
+  height: 32px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 11px;
+  opacity: 1;
+  cursor: pointer;
+}
+.conversation-delete:hover {
+  color: #ff9da5;
+  background: #ff9da51a;
+}
 .typing {
   color: var(--muted);
   animation: pulse 1s infinite alternate;
@@ -257,37 +282,6 @@
 .error-text {
   color: #ff9da5 !important;
 }
-.reminder-notices {
-  position: fixed;
-  top: 112px;
-  right: 24px;
-  z-index: 50;
-  display: grid;
-  gap: 10px;
-  width: min(340px, calc(100vw - 32px));
-}
-.reminder-notice {
-  padding: 16px;
-  border: 1px solid var(--accent);
-  border-radius: 12px;
-  background: var(--surface);
-  box-shadow: 0 12px 30px #0008;
-}
-.reminder-notice p {
-  margin: 8px 0 14px;
-}
-.reminder-notice > div {
-  display: flex;
-  gap: 12px;
-}
-.reminder-notice button {
-  padding: 6px 9px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  color: var(--accent);
-  background: transparent;
-  cursor: pointer;
-}
 .memory-page > .empty-panel {
   margin-top: 20px;
 }
@@ -453,3 +447,7 @@
     flex-direction: column;
   }
 }
+
+.agent-selector { display: grid; gap: 8px; margin: 12px 0 18px; font-size: 12px; color: var(--muted); }
+.agent-selector select { width: 100%; min-height: 40px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); }
+.agent-selector option { background: #1b1c28; }

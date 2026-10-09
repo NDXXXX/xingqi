@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { errorText, post, request } from "../api";
+import { errorText, post } from "../api";
 import { StateCard } from "../components/StateCard";
+import { useAgentRequest } from "../agentScope";
 import type { Item } from "../types";
 
 type Props = {
@@ -11,6 +12,7 @@ type Props = {
 };
 
 export function McpPage({ reloadKey, onLoadError, act, addMcp }: Props) {
+  const request = useAgentRequest();
   const [mcps, setMcps] = useState<Item[]>([]);
   const [pageLoading, setPageLoading] = useState(true);
   const dialog = window.zhiyuDialogs;
@@ -30,7 +32,7 @@ export function McpPage({ reloadKey, onLoadError, act, addMcp }: Props) {
     return () => {
       alive = false;
     };
-  }, [onLoadError, reloadKey]);
+  }, [onLoadError, reloadKey, request]);
   async function configureMcpAccess(name: string) {
     const found = await request<Item>(
       `/api/mcp/servers/${encodeURIComponent(name)}/test`,

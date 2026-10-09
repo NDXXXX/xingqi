@@ -23,17 +23,18 @@ from zhiyu.channels.messages import (
 )
 from zhiyu.core.agent.context import build_tool_registry, with_agent_context_async
 from zhiyu.core.agent.run_manager import active_runs
+from zhiyu.core.tools.registry import ToolRegistry
 from zhiyu.core.agent.runtime import ProviderCandidate, run_agent, run_agent_stream
 from zhiyu.core.memory.manager import MemoryManager, extract_assistant_name
+from zhiyu.core.memory.store import MemoryStore
 from zhiyu.core.memory.indexer import sync_changed_index
 from zhiyu.application.memory_jobs import MemoryJobProcessor
-from zhiyu.application.standing_intents import StandingIntentService
 from zhiyu.application.providers import PROVIDER_FALLBACKS_KEY
 from zhiyu.core.providers.base import AIProvider
 from zhiyu.core.providers.router import ProviderRouter, provider_router
 from zhiyu.core.providers.selection import ProviderSelectionError, select_provider_model
 from zhiyu.infrastructure.database.db import SessionLocal
-from zhiyu.infrastructure.database.models import AgentRun, Conversation, Message, StandingIntent, utcnow
+from zhiyu.infrastructure.database.models import AgentRun, Conversation, Message, Character, utcnow
 from zhiyu.infrastructure.database.repositories.agent_run_repository import AgentRunRepository
 from zhiyu.infrastructure.database.repositories.conversation_repository import ConversationRepository
 from zhiyu.infrastructure.database.repositories.conversation_summary_repository import (
@@ -60,6 +61,7 @@ class ChatRequest:
     conversation_id: str | None = None
     provider_id: str | None = None
     model: str | None = None
+    character_id: str | None = None
     regenerate: bool = False
     channel: str = "local"
     external_user_id: str | None = None
@@ -94,9 +96,8 @@ class _PreparedChat:
     fallbacks: list[ProviderCandidate]
     messages: list[dict]
     user_message_id: str
-    private_memory_allowed: bool
-    fired_intent_ids: list[str]
-    skip_memory_job: bool
+    character_id: str | None
+    tools: ToolRegistry
 
 
 class ChatService:
@@ -117,7 +118,6 @@ class ChatService:
         self.conversations = ConversationRepository()
         self.messages = MessageRepository()
         self.memory_jobs = MemoryJobRepository()
-        self.standing_intents = StandingIntentService()
         self.identities = IdentityRepository()
         self.channel_configs = ChannelConfigRepository()
         self.provider_configs = ProviderRepository()
@@ -135,14 +135,17 @@ class ChatService:
             conversation = self.conversations.get(db, request.conversation_id)
             if conversation is None:
                 raise ConversationNotFoundError("会话不存在")
+            if request.character_id is not None and conversation.character_id != request.character_id:
+                raise ValueError("会话属于其他智能体，请新建会话")
             if conversation.channel != request.channel:
                 raise ValueError("会话渠道与请求渠道不一致")
         elif request.channel == "local":
-            identity_id = self.identities.local(db).id
+            identity_id = self.identities.for_agent(db, request.character_id).id
             conversation_values = {
                 "title": request.message.strip()[:30] or "New Chat",
                 "channel": "local",
                 "identity_id": identity_id,
+                "character_id": request.character_id,
             }
             conversation = Conversation(id=str(uuid4()), **conversation_values)
         else:
@@ -180,10 +183,15 @@ class ChatService:
                 db.commit()
 
         if conversation.identity_id is None and conversation.channel == "local":
-            conversation.identity_id = self.identities.local(db).id
+            conversation.identity_id = self.identities.for_agent(db, conversation.character_id).id
             db.commit()
 
+        if conversation.character_id and conversation.identity_id != conversation.character_id:
+            raise ValueError("会话与智能体记忆工作区不一致")
         memory_manager = self.memory_processor.memory_manager
+        memory_store = getattr(memory_manager, "store", None)
+        if not isinstance(memory_store, MemoryStore):
+            memory_store = None
         if isinstance(memory_manager, MemoryManager) and conversation.identity_id:
             try:
                 sync_changed_index(db, memory_manager.store, conversation.identity_id)
@@ -243,7 +251,11 @@ class ChatService:
         ):
             name = extract_assistant_name(request.message)
             try:
-                if name is not None:
+                if conversation.character_id:
+                    if name is not None:
+                        db.get(Character, conversation.character_id).name = name
+                        db.commit()
+                elif name is not None:
                     memory_manager.set_assistant_name(db, conversation.identity_id, name, user_message.id)
                 else:
                     memory_manager.bootstrap_assistant_name(db, conversation.identity_id)
@@ -274,10 +286,6 @@ class ChatService:
             except Exception as exc:
                 db.rollback()
                 logger.warning("explicit memory update degraded: %s", exc)
-
-        intent_note = None
-        if not request.regenerate:
-            intent_note = self.standing_intents.record(db, conversation, user_message, request.message)
 
         summary = ConversationSummaryRepository().get(db, conversation.id)
         if (
@@ -334,6 +342,16 @@ class ChatService:
             content = getattr(response, "content", None)
             return content if isinstance(content, str) else None
 
+        private_memory_allowed = conversation.channel == "local" or (
+            conversation.channel == "qq" and conversation.external_conversation_type == "private"
+        )
+        tools = build_tool_registry(
+            self.mcp_manager, character_id=conversation.character_id,
+            session_factory=self.session_factory if private_memory_allowed else None,
+            identity_id=conversation.identity_id,
+            memory_store=memory_store,
+            allowed_tools=set(request.allowed_tools) if request.allowed_tools is not None else None,
+        )
         llm_messages = await with_agent_context_async(
             db,
             conversation,
@@ -343,28 +361,14 @@ class ChatService:
             model_config.max_output_tokens,
             recall=None,
             summary_generator=summarize_conversation,
-            memory_store=memory_manager.store if isinstance(memory_manager, MemoryManager) else None,
+            skill_tools=set(tools.names()),
+            memory_store=memory_store,
         )
         db.commit()
         llm_messages = [
             {key: value for key, value in item.items() if not key.startswith("_zhiyu_")}
             for item in llm_messages
         ]
-        due_intents = (
-            self.standing_intents.due_for_turn(
-                db, conversation, request.message, user_message.id
-            ) if conversation.channel == "local" or (
-                conversation.channel == "qq"
-                and conversation.external_conversation_type == "private"
-            ) else []
-        )
-        if intent_note or due_intents:
-            notices = [intent_note] if intent_note else []
-            notices.extend(f"本轮请提醒用户：{item.content}" for item in due_intents)
-            llm_messages = [
-                {"role": "system", "content": "主人设置的提醒状态：\n" + "\n".join(notices)},
-                *llm_messages,
-            ]
         if request.system_prompt:
             llm_messages = [
                 {"role": "system", "content": request.system_prompt},
@@ -417,12 +421,8 @@ class ChatService:
             fallbacks=fallbacks,
             messages=llm_messages,
             user_message_id=user_message.id,
-            private_memory_allowed=(conversation.channel == "local" or (
-                conversation.channel == "qq"
-                and conversation.external_conversation_type == "private"
-            )),
-            fired_intent_ids=[item.id for item in due_intents],
-            skip_memory_job=bool(intent_note),
+            character_id=conversation.character_id,
+            tools=tools,
         )
 
     def new_channel_session(
@@ -518,22 +518,7 @@ class ChatService:
                     channel_event_id=request.channel_event_id,
                 )
                 run_id = run.id
-            registry = build_tool_registry(
-                self.mcp_manager,
-                session_factory=(
-                    self.session_factory
-                    if prepared.identity_id and prepared.private_memory_allowed
-                    else None
-                ),
-                identity_id=prepared.identity_id,
-                memory_store=(
-                    self.memory_processor.memory_manager.store
-                    if isinstance(self.memory_processor.memory_manager, MemoryManager)
-                    else None
-                ),
-            )
-            if request.allowed_tools is not None:
-                registry = registry.filtered(set(request.allowed_tools))
+            registry = prepared.tools
             active_runs.register(
                 run_id,
                 prepared.conversation_id,
@@ -587,24 +572,6 @@ class ChatService:
                 yield event
 
             with self.session_factory() as db:
-                delivered_ids = []
-                missing_reminders = []
-                for intent_id in prepared.fired_intent_ids:
-                    intent = db.get(StandingIntent, intent_id)
-                    if (
-                        intent is None
-                        or intent.identity_id != prepared.identity_id
-                        or not self.standing_intents._ready(intent, utcnow())
-                    ):
-                        continue
-                    delivered_ids.append(intent_id)
-                    if intent.content not in final_response:
-                        missing_reminders.append("提醒：" + intent.content)
-                if missing_reminders:
-                    suffix = ("\n\n" if final_response else "") + "\n".join(missing_reminders)
-                    final_response += suffix
-                    if streaming:
-                        yield {"type": "chunk", "text": suffix}
                 assistant_message = (
                     self.messages.get_by_source(db, request.channel_event_id, "assistant")
                     if request.channel_event_id
@@ -630,7 +597,6 @@ class ChatService:
                 conversation = db.get(Conversation, prepared.conversation_id)
                 if (
                     not request.regenerate
-                    and not prepared.skip_memory_job
                     and prepared.identity_id
                     and conversation is not None
                     and (conversation.channel == "local" or (
@@ -643,6 +609,7 @@ class ChatService:
                         user_message_id=prepared.user_message_id,
                         assistant_message_id=assistant_message.id,
                         identity_id=prepared.identity_id,
+                        character_id=prepared.character_id,
                         provider_id=final_provider_id,
                         model=final_model,
                     )
@@ -664,8 +631,6 @@ class ChatService:
                 run_record.model_id = final_model
                 run_record.response_message_id = assistant_message.id
                 run_record.error = None
-                if delivered_ids:
-                    self.standing_intents.mark_fired(db, delivered_ids)
                 db.commit()
             self.memory_processor.kick()
             yield {

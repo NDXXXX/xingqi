@@ -75,6 +75,12 @@ class ConversationRepository:
         channel_config_id: str | None = None,
         external_conversation_type: str | None = None,
     ) -> Conversation:
+        if character_id is not None:
+            from .identity_repository import IdentityRepository
+            workspace = IdentityRepository().for_agent(db, character_id)
+            if identity_id is not None and identity_id != workspace.id:
+                raise ValueError("会话与智能体记忆工作区不一致")
+            identity_id = workspace.id
         conversation = Conversation(
             id=str(uuid4()),
             title=title,

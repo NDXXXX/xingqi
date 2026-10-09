@@ -16,7 +16,9 @@ from urllib.parse import urlsplit
 from zhiyu.infrastructure.config.settings import settings
 from zhiyu.infrastructure.database.db import SessionLocal
 from zhiyu.infrastructure.database.repositories.integration_repository import InstalledSkillRepository
-from zhiyu.infrastructure.database.models import AppSetting
+from sqlalchemy import select
+from zhiyu.infrastructure.database.models import AppSetting, CharacterSkill
+from zhiyu.integrations.skills.registry import SkillRegistry
 from zhiyu.integrations.skills.loader import Skill, parse_skill, validate_package
 from zhiyu.core.tools.registry import default_registry
 
@@ -82,8 +84,9 @@ def _changed_files(old: Path, new: Path) -> dict[str, list[str]]:
 
 
 class SkillService:
-    def __init__(self, session_factory=SessionLocal, skills_dir: Path | None = None) -> None:
+    def __init__(self, session_factory=SessionLocal, skills_dir: Path | None = None, character_id: str | None = None) -> None:
         self.session_factory = session_factory
+        self.character_id = character_id
         self.skills_dir = Path(skills_dir or settings.user_skills_dir).expanduser()
         self.repo = InstalledSkillRepository()
 
@@ -139,6 +142,15 @@ class SkillService:
                     continue
                 row = metadata.get(skill.name)
                 result.append(self._status(skill, row, available_tools))
+        if self.character_id is not None:
+            with self.session_factory() as db:
+                links = {row.skill_name: row.enabled for row in db.scalars(select(CharacterSkill).where(CharacterSkill.character_id == self.character_id))}
+            for skill in SkillRegistry(settings.builtin_skills_dir).all():
+                result.append(self._status(skill, None, available_tools))
+            for item in result:
+                item["assigned"] = item["name"] in links
+                item["enabled"] = links.get(item["name"], False)
+                item["available"] = item["enabled"] and item.get("valid", True) and not item.get("missing_tools") and not item.get("missing_bins")
         return result
 
     def repo_list(self):
@@ -146,6 +158,8 @@ class SkillService:
             return self.repo.list(db)
 
     def trash_list(self) -> list[dict]:
+        if self.character_id is not None:
+            return []
         with self.session_factory() as db:
             return [
                 {"name": item.name, "source_type": item.source_type,
@@ -211,6 +225,11 @@ class SkillService:
             try:
                 os.replace(stage, target)
                 self._save(skill, target, source_type, locator, ref, revision)
+                if self.character_id is not None:
+                    with self.session_factory() as db:
+                        self.repo.get(db, skill.name).enabled = False
+                        db.add(CharacterSkill(character_id=self.character_id, skill_name=skill.name, enabled=True))
+                        self._bump(db)
             except Exception:
                 shutil.rmtree(target, ignore_errors=True)
                 raise
@@ -223,6 +242,8 @@ class SkillService:
     def update(
         self, name: str, *, ref: str | None = None, apply: bool = False
     ) -> dict:
+        if self.character_id is not None:
+            raise ValueError("安装包更新会影响引用它的智能体，请在默认助手的 Skill 管理中更新")
         item = self._get(name)
         if item is None:
             raise ValueError("只能更新通过星栖安装并登记的 Skill")
@@ -278,6 +299,16 @@ class SkillService:
                 self._cleanup_temp_source(source)
 
     def enable(self, name: str, enabled: bool) -> None:
+        if self.character_id is not None:
+            self.show(name)
+            with self.session_factory() as db:
+                link = db.get(CharacterSkill, (self.character_id, name))
+                if link is None:
+                    db.add(CharacterSkill(character_id=self.character_id, skill_name=name, enabled=enabled))
+                else:
+                    link.enabled = enabled
+                self._bump(db)
+            return
         with self.session_factory() as db:
             item = self.repo.get(db, name)
             if item is None or item.trashed_at:
@@ -286,6 +317,17 @@ class SkillService:
             self._bump(db)
 
     def remove(self, name: str) -> Path:
+        if self.character_id is not None:
+            with self.session_factory() as db:
+                link = db.get(CharacterSkill, (self.character_id, name))
+                if link is None:
+                    raise ValueError("该智能体未关联这个 Skill")
+                db.delete(link)
+                self._bump(db)
+            return self.skills_dir / name
+        with self.session_factory() as db:
+            if db.scalars(select(CharacterSkill).where(CharacterSkill.skill_name == name)).first() is not None:
+                raise ValueError("其他智能体仍关联此 Skill，请先移除关联")
         item = self._get(name)
         if item is None or item.trashed_at:
             raise ValueError("只能移除星栖登记的用户 Skill")
@@ -312,6 +354,8 @@ class SkillService:
         return destination
 
     def restore(self, name: str) -> Path:
+        if self.character_id is not None:
+            raise ValueError("请在默认助手的 Skill 管理中恢复安装包")
         item = self._get(name)
         if item is None or not item.trashed_at:
             raise ValueError("回收站中没有这个 Skill")

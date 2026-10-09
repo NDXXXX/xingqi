@@ -5,12 +5,14 @@ import type { Item } from "../types";
 
 export function useChatSession({
   conversationId,
+  characterId,
   refreshConversations,
   onConversationCreated,
   onErrorClear,
   onRequestError,
 }: {
   conversationId: string | null;
+  characterId: string | null;
   refreshConversations: () => Promise<void>;
   onConversationCreated: (id: string) => void;
   onErrorClear: () => void;
@@ -83,7 +85,7 @@ export function useChatSession({
         const response = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-Zhiyu-Request": "1" },
-          body: JSON.stringify({ message: text, conversation_id: requestId }),
+          body: JSON.stringify({ message: text, conversation_id: requestId, character_id: characterId }),
           signal: controller.signal,
         });
         if (!response.ok || !response.body)
@@ -170,6 +172,7 @@ export function useChatSession({
     [
       busy,
       conversationId,
+      characterId,
       draft,
       onConversationCreated,
       onErrorClear,

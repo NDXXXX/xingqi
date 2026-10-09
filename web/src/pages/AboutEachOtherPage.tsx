@@ -195,6 +195,10 @@ export function AboutEachOtherPage({ reloadKey, onLoadError }: Props) {
             <h2>{file === "IDENTITY.md" ? "星栖的身份" : file === "USER.md" ? "你的资料与偏好" : "长期共同记忆"}</h2>
           </div>
           <span className="diary-day-count">{visibleMemories.length} 条</span>
+          <button className="danger-button" onClick={() => void (async () => {
+            if (!(await window.zhiyuDialogs.confirm("清空默认助手的全部记忆？聊天记录会保留，其他智能体不受影响。", "清空记忆"))) return;
+            try { await request("/api/memories/clear", post("POST")); await load(); } catch (error) { onLoadError(errorText(error)); }
+          })()}>清空记忆</button>
         </div>
         {visibleMemories.length ? (
           <div className="about-memory-list">

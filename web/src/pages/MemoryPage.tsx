@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { errorText, request } from "../api";
+import { errorText } from "../api";
 import { StateCard } from "../components/StateCard";
 import { stamp } from "../format";
+import { useAgentRequest } from "../agentScope";
 import type { Item } from "../types";
 
 const RUN_PAGE_SIZE = 20;
@@ -62,6 +63,7 @@ function consolidationSummary(run: Item) {
 }
 
 export function MemoryPage({ reloadKey }: { reloadKey: number }) {
+  const request = useAgentRequest();
   const [memories, setMemories] = useState<Item[]>([]);
   const [runs, setRuns] = useState<Item[]>([]);
   const [query, setQuery] = useState("");
@@ -90,7 +92,7 @@ export function MemoryPage({ reloadKey }: { reloadKey: number }) {
     } finally {
       if (isAlive()) setLoading(false);
     }
-  }, []);
+  }, [request]);
 
   useEffect(() => {
     let alive = true;

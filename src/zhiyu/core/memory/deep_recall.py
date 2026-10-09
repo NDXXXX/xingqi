@@ -12,7 +12,7 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from zhiyu.infrastructure.database.models import ForgottenConversation, MemoryRecallEvent
+from zhiyu.infrastructure.database.models import ForgottenConversation, Identity, MemoryRecallEvent
 from zhiyu.infrastructure.database.repositories.conversation_repository import ConversationRepository
 from zhiyu.infrastructure.database.repositories.memory_repository import MemoryRepository
 from zhiyu.infrastructure.database.repositories.message_repository import MessageRepository
@@ -121,10 +121,13 @@ def _search_history(
         ))
         and item.id not in forgotten
     ]
+    identity = db.get(Identity, identity_id)
+    reset_at = identity.memory_reset_at if identity else None
     plan = build_query_plan(query)
     found: list[tuple[float, str]] = []
     for conversation in conversations[:10]:
-        messages = MessageRepository().list_by_conversation(db, conversation.id)
+        messages = [item for item in MessageRepository().list_by_conversation(db, conversation.id)
+                    if reset_at is None or item.created_at >= reset_at]
         searchable_end = len(messages)
         if conversation.id == current_conversation_id:
             # 最近消息已在常规上下文里，只搜索可能被窗口裁掉的较早部分。

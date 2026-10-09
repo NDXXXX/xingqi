@@ -3,6 +3,7 @@ import type { Item } from "../types";
 
 export function ChatPage({
   conversationTitle,
+  agentName,
   modelLabel,
   requestError,
   messages,
@@ -14,6 +15,7 @@ export function ChatPage({
   onCancel,
 }: {
   conversationTitle: string;
+  agentName: string;
   modelLabel: string;
   requestError: string;
   messages: Item[];
@@ -45,7 +47,7 @@ export function ChatPage({
               key={`${item.id || index}`}
               className={`message ${item.role} ${item.error ? "error" : ""}`}
             >
-              <span className="role">{item.role === "user" ? "你" : "星栖"}</span>
+              <span className="role">{item.role === "user" ? "你" : agentName}</span>
               <span className="content">
                 {item.content}
                 {item.error && (
@@ -63,9 +65,9 @@ export function ChatPage({
           ))
         ) : (
           <div className="empty-state">
-            <span>星</span>
+            <span>{agentName.slice(0, 1)}</span>
             <h2>有什么想一起处理的？</h2>
-            <p>对话、工具与长期记忆都由同一个本地 Agent 处理。</p>
+            <p>与当前智能体对话，工具和长期记忆按它的权限使用。</p>
           </div>
         )}
       </div>

@@ -1,6 +1,9 @@
 """Skill Registry：注册 / 列表 / 匹配（bigram 重叠打分）。"""
 
 from collections.abc import Iterable
+from dataclasses import replace
+from sqlalchemy import select
+from zhiyu.infrastructure.database.models import CharacterSkill
 import logging
 from pathlib import Path
 
@@ -38,6 +41,19 @@ class SkillRegistry:
         self._skills = skills
         return self.all()
 
+    def for_agent(self, db, character_id: str | None, tool_names: set[str] | None = None):
+        view = SkillRegistry([])
+        if character_id is None:
+            skills = self.available(tool_names)
+        else:
+            names = set(db.scalars(select(CharacterSkill.skill_name).where(
+                CharacterSkill.character_id == character_id, CharacterSkill.enabled.is_(True),
+            )))
+            skills = [replace(skill, enabled=True) for skill in self.all()
+                      if skill.name in names and set(skill.required_tools) <= (tool_names or set())]
+        view._skills = {skill.name: skill for skill in skills}
+        return view
+
     def all(self) -> list[Skill]:
         return list(self._skills.values())
 
@@ -52,12 +68,12 @@ class SkillRegistry:
     def get(self, name: str) -> Skill | None:
         return self._skills.get(name)
 
-    def match(self, query: str, top_k: int = 3) -> list[Skill]:
+    def match(self, query: str, top_k: int = 3, tool_names: set[str] | None = None) -> list[Skill]:
         q = _bigrams(query)
         if not q:
             return []
         scored: list[tuple[int, Skill]] = []
-        for s in self.available():
+        for s in self.available(tool_names):
             overlap = len(q & _bigrams(f"{s.name} {s.description}"))
             if overlap:
                 scored.append((overlap, s))

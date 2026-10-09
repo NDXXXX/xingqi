@@ -19,7 +19,7 @@ class MemoryQueryService(MemoryOperations):
 
     def list(self, *, include_inactive: bool = False, tier: str | None = None) -> list[MemorySummary]:
         with self.session_factory() as db:
-            identity_id = self.identities.local(db).id
+            identity_id = self._identity(db).id
             self._sync(db, identity_id)
             statuses = None if include_inactive else ("active",)
             return [
@@ -38,7 +38,7 @@ class MemoryQueryService(MemoryOperations):
         if not needle:
             raise ValueError("搜索内容不能为空")
         with self.session_factory() as db:
-            identity_id = self.identities.local(db).id
+            identity_id = self._identity(db).id
             self._sync(db, identity_id)
             memories = self.memories.list_owned(
                 db, identity_id, statuses=None if include_inactive else ("active",), tier=tier
@@ -50,7 +50,7 @@ class MemoryQueryService(MemoryOperations):
 
     def get(self, memory_id: str) -> MemorySummary | None:
         with self.session_factory() as db:
-            identity_id = self.identities.local(db).id
+            identity_id = self._identity(db).id
             self._sync(db, identity_id)
             memory = self.memories.get_owned(db, identity_id, memory_id)
             return _summary(db, memory) if memory is not None else None
@@ -59,7 +59,7 @@ class MemoryQueryService(MemoryOperations):
         if not query.strip():
             raise ValueError("查询不能为空")
         with self.session_factory() as db:
-            identity_id = self.identities.local(db).id
+            identity_id = self._identity(db).id
             self._sync(db, identity_id)
             memories = [
                 *self.memories.list_visible(db, identity_id, tier="core"),
@@ -96,9 +96,9 @@ class MemoryQueryService(MemoryOperations):
 
     def status(self) -> dict[str, int | str]:
         with self.session_factory() as db:
-            identity_id = self.identities.local(db).id
+            identity_id = self._identity(db).id
             result: dict[str, int | str] = {
-                f"jobs_{key}": value for key, value in self.jobs.counts(db).items()
+                f"jobs_{key}": value for key, value in self.jobs.counts(db, identity_id).items()
             }
             mutation_counts = db.execute(
                 select(MemoryMutation.status, func.count(MemoryMutation.id))
@@ -137,7 +137,7 @@ class MemoryQueryService(MemoryOperations):
         from zhiyu.infrastructure.database.models import MemoryConsolidationRun
 
         with self.session_factory() as db:
-            identity_id = self.identities.local(db).id
+            identity_id = self._identity(db).id
             rows = db.scalars(
                 select(MemoryConsolidationRun)
                 .where(MemoryConsolidationRun.identity_id == identity_id)

@@ -5,7 +5,7 @@ from uuid import uuid4
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from ..models import Memory, utcnow
+from ..models import Identity, Memory, utcnow
 
 
 class MemoryRepository:
@@ -21,8 +21,9 @@ class MemoryRepository:
         if not identity_id:
             raise ValueError("读取记忆必须指定身份")
         condition = Memory.identity_id == identity_id
-        if include_shared:
-            condition = or_(condition, Memory.shared.is_(True))
+        identity = db.get(Identity, identity_id)
+        if include_shared and (identity is None or identity.channel != "agent"):
+            condition = or_(condition, (Memory.shared.is_(True) & Memory.character_id.is_(None)))
         query = select(Memory).where(condition)
         if statuses is not None:
             query = query.where(Memory.status.in_(statuses))
@@ -102,10 +103,15 @@ class MemoryRepository:
     ) -> Memory:
         if not identity_id:
             raise ValueError("保存记忆必须指定身份")
+        identity = db.get(Identity, identity_id)
+        character_id = identity.external_user_id if identity and identity.channel == "agent" else None
+        if character_id and shared:
+            raise ValueError("智能体记忆不支持共享")
         memory = Memory(
             id=str(uuid4()),
             user_id=user_id,
             identity_id=identity_id,
+            character_id=character_id,
             shared=shared,
             type=type,
             content=content,

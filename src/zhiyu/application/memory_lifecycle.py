@@ -10,7 +10,7 @@ from zhiyu.core.memory.extractor import MEMORY_TYPES
 from zhiyu.core.memory.retriever import derive_trigger_text
 from zhiyu.core.memory.safety import contains_secret
 from zhiyu.core.providers.embedding import embed_and_store
-from zhiyu.infrastructure.database.models import Conversation, ForgottenConversation, Memory, MemorySource, StandingIntent, utcnow
+from zhiyu.infrastructure.database.models import Conversation, ForgottenConversation, Memory, MemorySource, utcnow
 from zhiyu.application.memory_shared import MemoryOperations, MemorySummary, _summary
 
 
@@ -20,14 +20,14 @@ class MemoryLifecycleService(MemoryOperations):
     def add(self, *, type: str, content: str) -> MemorySummary:
         memory_type, normalized = self._validate(type, content)
         with self.session_factory() as db:
-            identity_id = self.identities.local(db).id
+            identity_id = self._identity(db).id
             memory = self._create_core(db, identity_id, memory_type, normalized)
             db.commit()
             return _summary(db, memory)
 
     def confirm(self, memory_id: str) -> MemorySummary:
         with self.session_factory() as db:
-            identity_id = self.identities.local(db).id
+            identity_id = self._identity(db).id
             memory = self.memories.get_owned(db, identity_id, memory_id)
             if memory is None or memory.status != "active" or memory.type not in {"goal", "project"}:
                 raise ValueError("只能确认有效的目标或项目")
@@ -37,7 +37,7 @@ class MemoryLifecycleService(MemoryOperations):
 
     def keep(self, memory_id: str) -> MemorySummary:
         with self.session_factory() as db:
-            identity_id = self.identities.local(db).id
+            identity_id = self._identity(db).id
             source = self.memories.get_owned(db, identity_id, memory_id)
             if (
                 source is None
@@ -133,7 +133,7 @@ class MemoryLifecycleService(MemoryOperations):
 
     def edit(self, memory_id: str, *, content: str) -> MemorySummary:
         with self.session_factory() as db:
-            identity_id = self.identities.local(db).id
+            identity_id = self._identity(db).id
             self._sync(db, identity_id)
             old = self.memories.get_owned(db, identity_id, memory_id)
             if old is None:
@@ -195,7 +195,7 @@ class MemoryLifecycleService(MemoryOperations):
 
     def complete(self, memory_id: str) -> MemorySummary:
         with self.session_factory() as db:
-            identity_id = self.identities.local(db).id
+            identity_id = self._identity(db).id
             self._sync(db, identity_id)
             memory = self.memories.get_owned(db, identity_id, memory_id)
             if memory is None:
@@ -214,7 +214,7 @@ class MemoryLifecycleService(MemoryOperations):
 
     def forget(self, memory_id: str) -> None:
         with self.session_factory() as db:
-            identity_id = self.identities.local(db).id
+            identity_id = self._identity(db).id
             self._sync(db, identity_id)
             memory = self.memories.get_owned(db, identity_id, memory_id)
             if memory is None:
@@ -264,7 +264,7 @@ class MemoryLifecycleService(MemoryOperations):
         if bool(memory_id) == bool(conversation_id):
             raise ValueError("必须且只能指定记忆或会话")
         with self.session_factory() as db:
-            identity_id = self.identities.local(db).id
+            identity_id = self._identity(db).id
             if memory_id:
                 memory = self.memories.get_owned(db, identity_id, memory_id)
                 if memory is None:
@@ -359,20 +359,13 @@ class MemoryLifecycleService(MemoryOperations):
                 "identity_id": identity_id,
                 "conversation_id": conversation_id,
                 "entries": entries,
-                "intents": [
-                    {"id": item.id, "content": item.content, "action": "delete"}
-                    for item in db.scalars(select(StandingIntent).where(
-                        StandingIntent.identity_id == identity_id,
-                        StandingIntent.source_conversation_id == conversation_id,
-                    ))
-                ],
                 "tombstone": True,
             }
 
     def forget_conversation(self, conversation_id: str) -> int:
         """删除某会话派生的情景观察，并记录遗忘墓碑。返回删除条数。"""
         with self.session_factory() as db:
-            identity_id = self.identities.local(db).id
+            identity_id = self._identity(db).id
             self._sync(db, identity_id)
             conversation = db.get(Conversation, conversation_id)
             if conversation is None or conversation.identity_id != identity_id:
@@ -432,11 +425,6 @@ class MemoryLifecycleService(MemoryOperations):
                 self.memories.delete_owned(db, identity_id, memory.id)
             for core in cores_to_delete:
                 self.memories.delete_owned(db, identity_id, core.id)
-            for item in db.scalars(select(StandingIntent).where(
-                StandingIntent.identity_id == identity_id,
-                StandingIntent.source_conversation_id == conversation_id,
-            )).all():
-                db.delete(item)
             exists = db.query(ForgottenConversation).filter_by(
                 identity_id=identity_id, conversation_id=conversation_id
             ).first()

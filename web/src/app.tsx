@@ -4,9 +4,12 @@ import {
   useRef,
   useState,
 } from "react";
+import { AgentScope } from "./agentScope";
+import { AgentsPage } from "./pages/AgentsPage";
+import { AgentAboutPage } from "./pages/AgentAboutPage";
 import { createRoot } from "react-dom/client";
 import { deriveOverview, type ApiResult } from "./overview";
-import { errorText, request } from "./api";
+import { errorText, post, request } from "./api";
 import { StateCard } from "./components/StateCard";
 import { ChatPage } from "./pages/ChatPage";
 import { MemoryPage } from "./pages/MemoryPage";
@@ -25,6 +28,7 @@ import "./app.css";
 const nav: { id: Page; icon: string; label: string }[] = [
   { id: "overview", icon: "⌂", label: "运行总览" },
   { id: "chat", icon: "◌", label: "对话" },
+  { id: "agents", icon: "◎", label: "智能体" },
   { id: "about", icon: "✧", label: "关于彼此" },
   { id: "providers", icon: "◈", label: "模型服务" },
   { id: "channels", icon: "⌁", label: "QQ 渠道" },
@@ -35,6 +39,7 @@ const nav: { id: Page; icon: string; label: string }[] = [
 const titles: Record<Page, string> = {
   overview: "运行总览",
   chat: "对话",
+  agents: "智能体",
   providers: "模型服务",
   channels: "QQ 渠道",
   plugins: "插件",
@@ -76,7 +81,11 @@ function App() {
   const [conversationTitle, setConversationTitle] = useState("新的对话");
   const [pageRevision, setPageRevision] = useState(0);
   const [pageError, setPageError] = useState("");
-  const [reminderNotices, setReminderNotices] = useState<Item[]>([]);
+  const [agents, setAgents] = useState<Item[]>([]);
+  const [characterId, setCharacterId] = useState<string | null>(() => new URLSearchParams(location.search).get("agent"));
+  const currentAgent = agents.find((item) => item.id === characterId);
+  const agentName = currentAgent?.name || "星栖";
+  const refreshAgents = useCallback(async () => setAgents(await request<Item[]>("/api/agents")), []);
   const conversationLoadRef = useRef(0);
 
   const refreshOverview = useCallback(async () => {
@@ -116,8 +125,11 @@ function App() {
   }, []);
 
   const refreshConversations = useCallback(
-    async () => setConversations(await request<Item[]>("/api/conversations")),
-    [],
+    async () => {
+      setConversations(await request<Item[]>("/api/conversations"));
+      await refreshAgents();
+    },
+    [refreshAgents],
   );
   const onConversationCreated = useCallback((id: string) => {
     setConversationId(id);
@@ -146,48 +158,44 @@ function App() {
     clearMessages,
   } = useChatSession({
     conversationId,
+    characterId,
     refreshConversations,
     onConversationCreated,
     onErrorClear: onChatErrorClear,
     onRequestError: reportPageError,
   });
-  useEffect(() => {
-    let active = true;
-    const seen = new Set(
-      (sessionStorage.getItem("zhiyu-seen-reminders") || "")
-        .split("|").filter(Boolean),
+  const deleteConversation = useCallback(async (item: Item) => {
+    const confirmed = await window.zhiyuDialogs.confirm(
+      "删除后会移除这段会话的聊天记录和运行记录，已沉淀的长期记忆会保留。",
+      "删除会话",
     );
-    const refresh = async () => {
-      const rows = await request<Item[]>("/api/reminders/recent");
-      if (!active) return;
-      const fresh = rows.filter((item) => {
-        const key = `${item.id}:${item.fired_at}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-      if (fresh.length) {
-        sessionStorage.setItem(
-          "zhiyu-seen-reminders", Array.from(seen).slice(-100).join("|"),
-        );
-        setReminderNotices((current) => [...fresh, ...current].slice(0, 5));
+    if (!confirmed) return;
+    try {
+      if (item.id === conversationId) await cancelRun();
+      await request(`/api/conversations/${encodeURIComponent(item.id)}`, post("DELETE"));
+      await refreshConversations();
+      if (item.id === conversationId) {
+        conversationLoadRef.current += 1;
+        setConversationId(null);
+        setConversationTitle("新的对话");
+        clearMessages();
+        setActivity("");
+        setPage("chat");
+        history.replaceState({}, "", "/?page=chat");
       }
-    };
-    void refresh().catch(() => undefined);
-    const timer = window.setInterval(() => {
-      void refresh().catch(() => undefined);
-    }, 5000);
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
-  }, []);
+    } catch (error) {
+      void window.zhiyuDialogs.alert(errorText(error), "删除失败");
+    }
+  }, [cancelRun, clearMessages, conversationId, refreshConversations, setActivity]);
   const openConversation = useCallback(
     async (id: string, title?: string) => {
       closeMobileMenu();
       await cancelRun();
       setActivity("");
       const loadId = ++conversationLoadRef.current;
+      const all = conversationsRef.current.length ? conversationsRef.current : await request<Item[]>("/api/conversations");
+      const stored = all.find((item) => item.id === id);
+      if (stored) setCharacterId(stored.character_id || null);
       setConversationId(id);
       setConversationTitle(title || "会话");
       setPage("chat");
@@ -218,8 +226,16 @@ function App() {
     clearMessages();
     setActivity("");
     setPage("chat");
-    history.pushState({}, "", "/?page=chat");
-  }, [cancelRun, clearMessages, closeMobileMenu]);
+    history.pushState({}, "", `/?page=chat${characterId ? `&agent=${encodeURIComponent(characterId)}` : ""}`);
+  }, [cancelRun, clearMessages, closeMobileMenu, characterId]);
+  const selectAgent = useCallback(async (id: string | null) => {
+    await startNewChat();
+    setCharacterId(id);
+    setPageError("");
+    setDraft("");
+    history.replaceState({}, "", `/?page=chat${id ? `&agent=${encodeURIComponent(id)}` : ""}`);
+  }, [startNewChat, setDraft]);
+
   const navigate = useCallback(
     async (target: Page) => {
       closeMobileMenu();
@@ -230,22 +246,23 @@ function App() {
       history.pushState(
         {},
         "",
-        target === "overview" ? "/" : target === "plugins"
-          ? `/?page=plugins&tab=${pluginTab}` : `/?page=${target}`,
+        target === "overview" ? `/${characterId ? `?agent=${encodeURIComponent(characterId)}` : ""}` : target === "plugins"
+          ? `/?page=plugins&tab=${pluginTab}${characterId ? `&agent=${encodeURIComponent(characterId)}` : ""}` : `/?page=${target}${characterId ? `&agent=${encodeURIComponent(characterId)}` : ""}`,
       );
     },
-    [busy, cancelRun, closeMobileMenu, pluginTab],
+    [busy, cancelRun, closeMobileMenu, pluginTab, characterId],
   );
 
   function selectPluginTab(tab: "mcp" | "skills") {
     setPluginTab(tab);
     setPageError("");
-    history.pushState({}, "", `/?page=plugins&tab=${tab}`);
+    history.pushState({}, "", `/?page=plugins&tab=${tab}${characterId ? `&agent=${encodeURIComponent(characterId)}` : ""}`);
   }
 
   useEffect(() => {
     void refreshOverview();
     void refreshConversations();
+    void refreshAgents().catch((error) => setPageError(errorText(error)));
     const onPop = () => {
       closeMobileMenu();
       const params = new URLSearchParams(location.search);
@@ -256,18 +273,22 @@ function App() {
         setPluginTab(raw === "skills" || params.get("tab") === "skills" ? "skills" : "mcp");
       setPage(nav.some((item) => item.id === target) ? target : "overview");
       setConversationId(id);
+      setCharacterId(params.get("agent"));
       if (id)
         void (async () => {
+          const loadId = ++conversationLoadRef.current;
           await cancelRun();
           const rows = await request<Item[]>(
             `/api/conversations/${encodeURIComponent(id)}/messages`,
           );
+          if (loadId !== conversationLoadRef.current) return;
           setMessages(
             rows.map((row) => ({
               ...row,
               role: row.role === "user" ? "user" : "assistant",
             })),
           );
+          setCharacterId(conversationsRef.current.find((item) => item.id === id)?.character_id || null);
           setConversationTitle(
             conversationsRef.current.find((item) => item.id === id)?.title ||
               "会话",
@@ -306,9 +327,11 @@ function App() {
   const { addProvider, addMcp, installSkill } = useManagementActions(
     act,
     onManagementChanged,
+    characterId,
   );
 
   const pageBody = (() => {
+    if (page === "agents") return <AgentsPage agents={agents} selectedId={characterId} onSelect={selectAgent} onChanged={refreshAgents} />;
     if (page === "overview")
       return (
         <OverviewPage
@@ -365,7 +388,7 @@ function App() {
       );
     if (page === "about")
       return (
-        <AboutEachOtherPage
+        characterId ? (currentAgent ? <AgentAboutPage agent={currentAgent} reloadKey={pageRevision} onLoadError={reportPageError} /> : <StateCard title="智能体不存在或正在加载" />) : <AboutEachOtherPage
           reloadKey={pageRevision}
           onLoadError={reportPageError}
         />
@@ -402,6 +425,13 @@ function App() {
               ☰
             </button>
           </div>
+          <label className="agent-selector">
+            <span>当前智能体</span>
+            <select aria-label="选择智能体" value={characterId || ""} onChange={(event) => void selectAgent(event.target.value || null)}>
+              <option value="">星栖 · 默认助手</option>
+              {agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
+            </select>
+          </label>
           <button className="primary wide" onClick={() => void startNewChat()}>
             新对话
           </button>
@@ -419,16 +449,25 @@ function App() {
           </nav>
           <div className="section-title">最近会话</div>
           <div className="conversation-list">
-            {conversations.slice(0, 30).map((item) => (
-              <button
-                key={item.id}
-                className={`conversation ${item.id === conversationId ? "active" : ""}`}
-                onClick={() => void openConversation(item.id, item.title)}
-              >
-                {item.title || "未命名会话"}
-              </button>
+            {conversations.filter((item) => (item.character_id || null) === characterId).slice(0, 30).map((item) => (
+              <div className="conversation-row" key={item.id}>
+                <button
+                  className={`conversation ${item.id === conversationId ? "active" : ""}`}
+                  onClick={() => void openConversation(item.id, item.title)}
+                >
+                  {item.title || "未命名会话"}
+                </button>
+                <button
+                  className="conversation-delete"
+                  aria-label={`删除会话：${item.title || "未命名会话"}`}
+                  title="删除会话"
+                  onClick={() => void deleteConversation(item)}
+                >
+                  删除
+                </button>
+              </div>
             ))}
-            {conversations.length === 0 && (
+            {!conversations.some((item) => (item.character_id || null) === characterId) && (
               <small className="muted sidebar-empty">暂无会话</small>
             )}
           </div>
@@ -447,12 +486,14 @@ function App() {
           </div>
         </div>
       </aside>
-      <main className="main">
+      <AgentScope.Provider value={characterId}>
+      <main className="main" key={characterId || "default"}>
         {page === "chat" ? (
           <ChatPage
-            conversationTitle={conversationTitle}
+            agentName={agentName}
+            conversationTitle={`${agentName} · ${conversationTitle}`}
             modelLabel={
-              overview?.model?.model
+              currentAgent?.default_model_id ? "智能体默认模型" : overview?.model?.model
                 ? `${overview.model.provider} · ${overview.model.model}`
                 : "默认模型未配置"
             }
@@ -477,7 +518,7 @@ function App() {
                       : page === "channels"
                         ? "OneBot / NapCat"
                         : page === "plugins"
-                          ? "MCP 服务与 Skills"
+                          ? `${agentName} · MCP 服务与 Skills`
                           : page === "diagnostics"
                               ? "事件、投递与故障"
                               : page === "memory"
@@ -549,27 +590,7 @@ function App() {
           </>
         )}
       </main>
-      {reminderNotices.length > 0 && (
-        <aside className="reminder-notices" aria-live="polite" aria-label="定时提醒">
-          {reminderNotices.map((item) => (
-            <div className="reminder-notice" key={`${item.id}:${item.fired_at}`}>
-              <strong>星栖提醒</strong>
-              <p>{item.content}</p>
-              <div>
-                <button onClick={() => {
-                  setReminderNotices((current) => current.filter((row) => row !== item));
-                  void openConversation(item.conversation_id).catch((error) =>
-                    setPageError(errorText(error))
-                  );
-                }}>查看会话</button>
-                <button onClick={() =>
-                  setReminderNotices((current) => current.filter((row) => row !== item))
-                }>关闭</button>
-              </div>
-            </div>
-          ))}
-        </aside>
-      )}
+      </AgentScope.Provider>
     </div>
   );
 }

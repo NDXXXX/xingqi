@@ -55,9 +55,9 @@ class McpServerSummary:
 
 
 class McpService:
-    def __init__(self, session_factory=SessionLocal, secrets: KeyStore = keystore) -> None:
+    def __init__(self, session_factory=SessionLocal, secrets: KeyStore = keystore, character_id: str | None = None) -> None:
         self.session_factory = session_factory
-        self.configs = McpConfigRepository()
+        self.configs = McpConfigRepository(character_id)
         self.states = McpRuntimeStateRepository()
         self.settings = SettingRepository()
         self.secrets = secrets
@@ -374,10 +374,10 @@ class McpService:
         finally:
             await connection.close()
 
-    def runtime_configs(self) -> list[dict]:
+    def runtime_configs(self, *, all_agents: bool = False) -> list[dict]:
         with self.session_factory() as db:
             result = []
-            for item in self.configs.list_auto_connect(db):
+            for item in self.configs.list_auto_connect(db, all_agents=all_agents):
                 config = _config_dict(item, self.configs)
                 try:
                     result.append(self._runtime_config(config))
@@ -495,6 +495,7 @@ class McpService:
 def _config_dict(item, repo: McpConfigRepository) -> dict:
     return {
         "id": item.id,
+        "character_id": item.character_id,
         "name": item.name,
         "transport": item.transport or "stdio",
         "command": item.command,

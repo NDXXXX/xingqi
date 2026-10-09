@@ -23,6 +23,7 @@ from zhiyu.core.providers.router import provider_router
 from zhiyu.infrastructure.database.db import SessionLocal
 from zhiyu.infrastructure.database.models import (
     Conversation,
+    Identity,
     ForgottenConversation,
     Memory,
     MemoryConsolidationRun,
@@ -54,6 +55,8 @@ class ConsolidationProcessor:
     ) -> dict:
         with self.session_factory() as db:
             identity_id = identity_id or IdentityRepository().local(db).id
+            identity = db.get(Identity, identity_id)
+            memory_reset_at = identity.memory_reset_at if identity else None
             sync_changed_index(db, self.store, identity_id)
             pending = self._pending(db, identity_id)
             if not pending:
@@ -80,8 +83,12 @@ class ConsolidationProcessor:
                 await self._rem_stage(client, model.model_name, valid)
                 if client and model else "REM 反思未完成：没有可用的模型"
             )
-            if not dry_run:
-                self._write_phase_notes(identity_id, light, rem)
+            with self.session_factory() as db:
+                identity = db.get(Identity, identity_id)
+                if identity and identity.memory_reset_at != memory_reset_at:
+                    return {"status": "cancelled", "pending": 0}
+                if not dry_run:
+                    self._write_phase_notes(identity_id, light, rem)
             if not candidates:
                 stats = {
                     "candidate_count": len(pending), "eligible": 0,
@@ -93,6 +100,9 @@ class ConsolidationProcessor:
                 return {"status": "skipped", **stats}
             operations = await propose(client, model.model_name, candidates, core)
             with self.session_factory() as db:
+                identity = db.get(Identity, identity_id)
+                if identity and identity.memory_reset_at != memory_reset_at:
+                    return {"status": "cancelled", "pending": 0}
                 stats = apply_consolidation(
                     db, self.store, identity_id, operations, dry_run=dry_run
                 )

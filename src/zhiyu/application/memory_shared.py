@@ -79,13 +79,17 @@ def _summary(db, memory) -> MemorySummary:
 class MemoryOperations:
     """Dependencies shared by memory queries and lifecycle operations."""
 
-    def __init__(self, session_factory=SessionLocal, store: MemoryStore | None = None) -> None:
+    def __init__(self, session_factory=SessionLocal, store: MemoryStore | None = None, character_id: str | None = None) -> None:
         self.session_factory = session_factory
+        self.character_id = character_id
         self.memories = MemoryRepository()
         self.jobs = MemoryJobRepository()
         self.identities = IdentityRepository()
         self.store = store or MemoryStore()
         self.mutations = FileMutationManager(self.store)
+
+    def _identity(self, db):
+        return self.identities.for_agent(db, self.character_id)
 
     def _sync(self, db, identity_id: str) -> None:
         sync_changed_index(db, self.store, identity_id)

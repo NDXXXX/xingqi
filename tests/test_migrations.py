@@ -53,7 +53,7 @@ def test_upgrade_preserves_legacy_data(tmp_path):
 
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT title FROM conversations WHERE id='c1'")) == "保留我"
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0022_standing_intents"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0023_multi_agent"
         assert connection.scalar(text(
             "SELECT memory_id FROM memory_fts WHERE memory_fts MATCH '\"保留这\"'"
         )) == "m1"
@@ -106,7 +106,8 @@ def test_upgrade_preserves_legacy_data(tmp_path):
     }
     assert {"memory_sources", "memory_recall_events", "memory_mutations"} <= tables
     assert "memory_file_indexes" in tables
-    assert "standing_intents" in tables
+    assert "standing_intents" not in tables
+    assert "character_skills" in tables
     assert "last_evidence_at" in {
         column["name"] for column in inspect(engine).get_columns("memories")
     }
@@ -199,3 +200,32 @@ def test_pre_migration_backup_contains_database_and_memory(tmp_path):
         assert connection.scalar(text("SELECT value FROM sample")) == "before"
     assert (backup / "memory" / "MEMORY.md").read_text(encoding="utf-8") == "- before\n"
     assert "0012" in (backup / "manifest.json").read_text(encoding="utf-8")
+
+
+def test_multi_agent_upgrade_keeps_history_memory_and_default_permissions(tmp_path):
+    database = tmp_path / "agents.db"
+    config = migration_config(f"sqlite:///{database}")
+    command.upgrade(config, "0022_standing_intents")
+    engine = create_engine(f"sqlite:///{database}")
+    with engine.begin() as connection:
+        connection.execute(text("INSERT INTO characters (id, name, created_at, updated_at) VALUES ('agent-a', '角色', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
+        connection.execute(text("INSERT INTO conversations (id, title, character_id, identity_id, channel, created_at, updated_at) VALUES ('a-chat', '保留角色会话', 'agent-a', '00000000-0000-0000-0000-000000000001', 'local', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP), ('orphan', '旧角色已不存在', 'missing', NULL, 'local', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
+        connection.execute(text("INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES ('m-a', 'a-chat', 'user', '保留原话', CURRENT_TIMESTAMP)"))
+        connection.execute(text("INSERT INTO memories (id, identity_id, type, content, importance, status, origin, tier, trust, source_kind, promotion_status, observed_at, created_at, updated_at) VALUES ('old-memory', '00000000-0000-0000-0000-000000000001', 'fact', '正式迁移不能删除记忆', 0.5, 'active', 'manual', 'core', 'owner', 'manual', 'none', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
+        connection.execute(text("INSERT INTO memory_jobs (id, user_message_id, identity_id, model, status, attempts, created_at, updated_at) VALUES ('j-a', 'm-a', '00000000-0000-0000-0000-000000000001', 'fake', 'pending', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
+        connection.execute(text("INSERT INTO mcp_server_configs (id, name, command, args_json, enabled, auto_connect, tool_allowlist_json, legacy_all_tools, created_at, updated_at) VALUES ('default-mcp', 'same-name', 'tool', '[]', 0, 0, '[\"lookup\"]', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
+    command.upgrade(config, "head")
+    with engine.begin() as connection:
+        assert connection.scalar(text("SELECT COUNT(*) FROM messages WHERE id='m-a'")) == 1
+        assert connection.scalar(text("SELECT identity_id FROM conversations WHERE id='a-chat'")) == "agent-a"
+        assert connection.scalar(text("SELECT character_id FROM conversations WHERE id='orphan'")) is None
+        assert connection.scalar(text("SELECT COUNT(*) FROM memories WHERE id='old-memory' AND character_id IS NULL")) == 1
+        assert connection.scalar(text("SELECT status FROM memory_jobs WHERE id='j-a'")) == "cancelled"
+        assert connection.scalar(text("SELECT COUNT(*) FROM character_skills")) == 0
+        assert connection.execute(text("SELECT character_id, tool_allowlist_json, legacy_all_tools FROM mcp_server_configs WHERE id='default-mcp'")).one() == (None, '["lookup"]', 1)
+        assert connection.execute(text("PRAGMA foreign_key_check")).all() == []
+        connection.execute(text("PRAGMA foreign_keys=ON"))
+        from sqlalchemy.exc import IntegrityError
+        import pytest
+        with pytest.raises(IntegrityError):
+            connection.execute(text("DELETE FROM characters WHERE id='agent-a'"))

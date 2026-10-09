@@ -11,7 +11,6 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from zhiyu.application.memories import MemoryService
-from zhiyu.application.standing_intents import StandingIntentService
 from zhiyu.core.memory.consolidation import apply_consolidation
 from zhiyu.core.memory.indexer import rebuild_index, sync_changed_index
 from zhiyu.core.memory.manager import MemoryManager, extract_assistant_name
@@ -25,7 +24,6 @@ from zhiyu.infrastructure.database.models import (
     MemoryEmbedding,
     MemoryMutation,
     MemorySource,
-    StandingIntent,
 )
 from zhiyu.infrastructure.database.repositories.conversation_repository import (
     ConversationRepository,
@@ -636,7 +634,7 @@ def test_forgetting_one_of_two_sources_removes_automatic_core(tmp_path):
         assert MemoryRepository().get_owned(db, identity_id, second_id) is not None
 
 
-def test_forget_recovery_removes_mixed_source_core_and_intent(tmp_path, monkeypatch):
+def test_forget_recovery_removes_mixed_source_core(tmp_path, monkeypatch):
     factory = _database()
     store = MemoryStore(tmp_path)
     with factory() as db:
@@ -646,13 +644,6 @@ def test_forget_recovery_removes_mixed_source_core_and_intent(tmp_path, monkeypa
         )
         other_conversation = ConversationRepository().create(
             db, title="surviving", channel="local", identity_id=identity_id
-        )
-        reminder_message = MessageRepository().create(
-            db, conversation_id=conversation.id, role="user",
-            content="下次聊部署时提醒我检查变更日志",
-        )
-        StandingIntentService().record(
-            db, conversation, reminder_message, reminder_message.content
         )
         path = store.daily_path(identity_id=identity_id)
         entry = store.append(
@@ -717,7 +708,6 @@ def test_forget_recovery_removes_mixed_source_core_and_intent(tmp_path, monkeypa
         assert MemoryRepository().get_owned(db, identity_id, candidate_id) is None
         assert MemoryRepository().get_owned(db, identity_id, core_id) is None
         assert MemoryRepository().get_owned(db, identity_id, other_id) is not None
-        assert db.scalars(select(StandingIntent)).all() == []
         assert db.scalars(
             select(ForgottenConversation).where(
                 ForgottenConversation.identity_id == identity_id,

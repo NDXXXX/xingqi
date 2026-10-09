@@ -75,8 +75,8 @@ def test_stale_goal_is_recalled_as_historical_not_current():
 
 def test_with_agent_context_injects_character_and_memory():
     db = _session()
-    identity = IdentityRepository().local(db)
     character = CharacterRepository().create(db, name="Luna", personality="温柔")
+    identity = IdentityRepository().for_agent(db, character.id)
     conversation = ConversationRepository().create(
         db, title="chat", channel="local", character_id=character.id, identity_id=identity.id
     )

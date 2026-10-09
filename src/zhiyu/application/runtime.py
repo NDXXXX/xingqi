@@ -8,11 +8,9 @@ from sqlalchemy import select
 from zhiyu.application.chat import ChatService
 from zhiyu.application.channels import ChannelService
 from zhiyu.application.consolidation_jobs import ConsolidationProcessor
-from zhiyu.application.standing_intents import StandingIntentService
 from zhiyu.application.mcp import CONFIG_REVISION_KEY, McpService
 from zhiyu.application.skills import SkillService
 from zhiyu.channels.media import MediaStore
-from zhiyu.channels.messages import OutboundMessage
 from zhiyu.channels.manager import ChannelManager
 from zhiyu.channels.router import ChannelRouter
 from zhiyu.integrations.mcp.manager import McpManager
@@ -22,7 +20,6 @@ from zhiyu.infrastructure.database.models import Identity, MemoryFileIndex, Memo
 from zhiyu.core.memory.indexer import rebuild_index, sync_changed_index
 from zhiyu.core.memory.store import MemoryStore
 from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository
-from zhiyu.infrastructure.database.repositories.message_repository import MessageRepository
 
 
 logger = logging.getLogger(__name__)
@@ -65,7 +62,6 @@ class RuntimeHost:
         self._recovery_task: asyncio.Task | None = None
         self._integration_task: asyncio.Task | None = None
         self._dream_task: asyncio.Task | None = None
-        self._intent_task: asyncio.Task | None = None
         self._integration_revision: int | None = None
         self._skills_revision: int | None = None
         self.channel_start_errors: list[str] = []
@@ -89,7 +85,6 @@ class RuntimeHost:
                 self.channel_start_errors.append(message)
                 logger.warning("Channel auto-connect degraded: %s", message)
         self.chat_service.memory_processor.kick()
-        self._intent_task = asyncio.create_task(self._reminder_loop())
         self._dream_task = asyncio.create_task(
             ConsolidationProcessor(
                 self.chat_service.session_factory,
@@ -141,10 +136,6 @@ class RuntimeHost:
             self._dream_task.cancel()
             await asyncio.gather(self._dream_task, return_exceptions=True)
             self._dream_task = None
-        if self._intent_task is not None:
-            self._intent_task.cancel()
-            await asyncio.gather(self._intent_task, return_exceptions=True)
-            self._intent_task = None
         if self._recovery_task is not None:
             self._recovery_task.cancel()
             await asyncio.gather(self._recovery_task, return_exceptions=True)
@@ -185,50 +176,8 @@ class RuntimeHost:
                 logger.exception("Channel recovery sweep failed")
             await asyncio.sleep(5)
 
-    async def _reminder_loop(self) -> None:
-        while True:
-            try:
-                await self._deliver_due_reminders()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("Standing reminder delivery failed")
-            await asyncio.sleep(30)
-
-    async def _deliver_due_reminders(self) -> None:
-        intents = StandingIntentService()
-        with self.chat_service.session_factory() as db:
-            local_due = intents.due_local(db)
-            for item in local_due:
-                MessageRepository().create(
-                    db, conversation_id=item.source_conversation_id,
-                    role="assistant", content="提醒：" + item.content, commit=False,
-                )
-            intents.mark_fired(db, [item.id for item in local_due])
-            db.commit()
-            due = intents.due_qq(db)
-        for item in due:
-            adapter = next((
-                candidate for candidate in self.channel_manager._adapters.values()
-                if getattr(candidate, "channel_config_id", None) == item.channel_config_id
-                and getattr(candidate, "owner_user_id", None) == item.target_id
-            ), None)
-            if adapter is None or not item.target_id or not item.target_id.isdigit():
-                continue
-            try:
-                receipt = await adapter.send(OutboundMessage.text(
-                    item.target_id, "提醒：" + item.content,
-                    conversation_type="private",
-                ))
-            except ConnectionError:
-                continue
-            if receipt.status in {"sent", "unknown"}:
-                with self.chat_service.session_factory() as db:
-                    intents.mark_fired(db, [item.id])
-                    db.commit()
-
     async def _reconcile_integrations(self) -> None:
-        configs = self.mcp_service.runtime_configs()
+        configs = self.mcp_service.runtime_configs(all_agents=True)
         await self.mcp_manager.reconcile(configs)
         with self.chat_service.session_factory() as db:
             self._integration_revision = self.settings.get(db, CONFIG_REVISION_KEY) or 0

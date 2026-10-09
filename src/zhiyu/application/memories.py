@@ -8,6 +8,8 @@ from zhiyu.application.memory_shared import MemorySummary
 from zhiyu.core.memory.indexer import get_index_status, rebuild_index
 from zhiyu.core.memory.store import MemoryStore
 from zhiyu.infrastructure.database.db import SessionLocal
+from sqlalchemy import delete
+from zhiyu.infrastructure.database.models import MemoryConsolidationRun, utcnow
 from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository
 
 
@@ -18,12 +20,14 @@ class MemoryService:
         self,
         session_factory=SessionLocal,
         store: MemoryStore | None = None,
+        character_id: str | None = None,
     ) -> None:
         shared_store = store or MemoryStore()
         self.session_factory = session_factory
+        self.character_id = character_id
         self.store = shared_store
-        self._queries = MemoryQueryService(session_factory, shared_store)
-        self._lifecycle = MemoryLifecycleService(session_factory, shared_store)
+        self._queries = MemoryQueryService(session_factory, shared_store, character_id)
+        self._lifecycle = MemoryLifecycleService(session_factory, shared_store, character_id)
 
     def list(
         self, *, include_inactive: bool = False, tier: str | None = None
@@ -46,7 +50,7 @@ class MemoryService:
 
     def index_status(self) -> dict:
         with self.session_factory() as db:
-            return get_index_status(db)
+            return get_index_status(db, IdentityRepository().for_agent(db, self.character_id).id)
 
     def consolidation_runs(self, limit: int = 5, offset: int = 0) -> list[dict]:
         return self._queries.consolidation_runs(limit, offset)
@@ -82,13 +86,30 @@ class MemoryService:
     def forget_conversation(self, conversation_id: str) -> int:
         return self._lifecycle.forget_conversation(conversation_id)
 
+    def clear(self) -> int:
+        with self.session_factory() as db:
+            identity = IdentityRepository().for_agent(db, self.character_id)
+            identity_id = identity.id
+            identity.memory_reset_at = utcnow()
+            self._lifecycle.jobs.cancel_pending(db, identity.id)
+            db.commit()
+        items = self.list(include_inactive=True)
+        for item in items:
+            if self.get(item.id) is not None:
+                self.forget(item.id)
+        self.store.clear_dreams(identity_id)
+        with self.session_factory() as db:
+            db.execute(delete(MemoryConsolidationRun).where(MemoryConsolidationRun.identity_id == identity_id))
+            db.commit()
+        return len(items)
+
     def rebuild_index(self) -> dict:
         with self.session_factory() as db:
-            return rebuild_index(db, self.store)
+            return rebuild_index(db, self.store, IdentityRepository().for_agent(db, self.character_id).id)
 
     def export_files(self) -> list[tuple[str, str]]:
         with self.session_factory() as db:
-            identity_id = IdentityRepository().local(db).id
+            identity_id = IdentityRepository().for_agent(db, self.character_id).id
         return [
             (path.name, path.read_text(encoding="utf-8"))
             for path in self.store.list_memory_files(identity_id)

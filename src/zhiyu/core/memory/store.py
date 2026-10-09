@@ -185,6 +185,12 @@ class MemoryStore:
     def dreams_path(self, identity_id: str) -> Path:
         return self.vault_dir(identity_id) / DREAMS_FILE
 
+    def clear_dreams(self, identity_id: str) -> None:
+        path = self.dreams_path(identity_id)
+        if path.exists():
+            with self._lock_for(path):
+                self._atomic_write(path, "")
+
     def read_bootstrap_files(self, identity_id: str) -> dict[str, str]:
         """读取并补齐工作区引导文件；已存在的用户编辑内容保持原样。"""
         vault = self.vault_dir(identity_id)

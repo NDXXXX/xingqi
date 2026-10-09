@@ -14,7 +14,6 @@ from zhiyu.infrastructure.database.models import (
     MemoryFileIndex,
     MemoryMutation,
     MemorySource,
-    StandingIntent,
 )
 from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository
 from zhiyu.infrastructure.database.repositories.memory_repository import MemoryRepository
@@ -262,13 +261,6 @@ def rebuild_index(
                     delete(MemorySource).where(
                         MemorySource.identity_id == identity_id,
                         MemorySource.conversation_id
-                        == forgotten_conversation_id,
-                    )
-                )
-                db.execute(
-                    delete(StandingIntent).where(
-                        StandingIntent.identity_id == identity_id,
-                        StandingIntent.source_conversation_id
                         == forgotten_conversation_id,
                     )
                 )
