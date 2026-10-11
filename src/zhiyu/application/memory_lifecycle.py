@@ -9,8 +9,10 @@ from sqlalchemy import select
 from zhiyu.core.memory.extractor import MEMORY_TYPES
 from zhiyu.core.memory.retriever import derive_trigger_text
 from zhiyu.core.memory.safety import contains_secret
+from zhiyu.core.memory.scopes import SHARED_USER_MEMORY_TYPES
 from zhiyu.core.providers.embedding import embed_and_store
-from zhiyu.infrastructure.database.models import Conversation, ForgottenConversation, Memory, MemorySource, utcnow
+from zhiyu.infrastructure.database.models import Conversation, ForgottenConversation, Identity, Memory, MemorySource, utcnow
+from zhiyu.infrastructure.database.repositories.identity_repository import LOCAL_IDENTITY_ID
 from zhiyu.application.memory_shared import MemoryOperations, MemorySummary, _summary
 
 
@@ -20,8 +22,18 @@ class MemoryLifecycleService(MemoryOperations):
     def add(self, *, type: str, content: str) -> MemorySummary:
         memory_type, normalized = self._validate(type, content)
         with self.session_factory() as db:
-            identity_id = self._identity(db).id
-            memory = self._create_core(db, identity_id, memory_type, normalized)
+            identity = self._identity(db)
+            is_shared = memory_type in SHARED_USER_MEMORY_TYPES and identity.channel in {"local", "agent"}
+            identity_id = LOCAL_IDENTITY_ID if is_shared else identity.id
+            if identity_id == LOCAL_IDENTITY_ID and db.get(Identity, identity_id) is None:
+                db.add(Identity(
+                    id=LOCAL_IDENTITY_ID,
+                    channel="local",
+                    external_user_id="local-user",
+                    display_name="Local User",
+                ))
+                db.flush()
+            memory = self._create_core(db, identity_id, memory_type, normalized, shared=is_shared)
             db.commit()
             return _summary(db, memory)
 
@@ -449,6 +461,7 @@ class MemoryLifecycleService(MemoryOperations):
         content: str,
         *,
         supersedes_id: str | None = None,
+        shared: bool = False,
     ) -> Memory:
         path = self.store.path_for(memory_type, identity_id)
         entry, mutation = self.mutations.append(
@@ -456,7 +469,7 @@ class MemoryLifecycleService(MemoryOperations):
             identity_id,
             path,
             content,
-            meta={"type": memory_type},
+            meta={"type": memory_type, "shared": shared},
             context={
                 "origin": "manual",
                 "tier": "core",
@@ -464,6 +477,7 @@ class MemoryLifecycleService(MemoryOperations):
                 "source_kind": "manual",
                 "promotion_status": "none",
                 "supersedes_id": supersedes_id,
+                "shared": shared,
             },
         )
         memory = self._create_core_record(
@@ -473,6 +487,7 @@ class MemoryLifecycleService(MemoryOperations):
             entry,
             path,
             supersedes_id=supersedes_id,
+            shared=shared,
         )
         self.mutations.complete(db, mutation)
         return memory
@@ -486,12 +501,14 @@ class MemoryLifecycleService(MemoryOperations):
         path,
         *,
         supersedes_id: str | None = None,
+        shared: bool = False,
     ) -> Memory:
         memory = self.memories.create(
             db,
             type=memory_type,
             content=entry.content,
             identity_id=identity_id,
+            shared=shared,
             origin="manual",
             tier="core",
             trust="owner",

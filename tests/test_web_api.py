@@ -1,4 +1,7 @@
 import json
+from datetime import datetime, timedelta
+from io import BytesIO
+import zipfile
 from unittest.mock import Mock
 
 from fastapi.testclient import TestClient
@@ -117,10 +120,148 @@ def test_web_chat_stream_and_shared_conversation(tmp_path):
 
         conversations = client.get("/api/conversations").json()
         assert conversations[0]["id"] == done["conversation_id"]
+        assert conversations[0]["provider_id"] == provider_id
+        assert conversations[0]["model_id"] == model_name
         messages = client.get(
             f"/api/conversations/{done['conversation_id']}/messages"
         ).json()
         assert [item["role"] for item in messages] == ["user", "assistant"]
+
+
+def test_scheduled_task_api_create_list_pause_delete(tmp_path):
+    client, *_ = make_client(tmp_path)
+    with client:
+        due = (datetime.now() + timedelta(hours=1)).isoformat(timespec="seconds")
+        created = client.post("/api/scheduled-tasks", json={
+            "content": "带伞", "due_at": due, "timezone": "Asia/Shanghai", "channel": "local",
+        })
+        assert created.status_code == 200
+        task = created.json()
+        assert task["status"] == "pending"
+        assert client.get("/api/scheduled-tasks").json()[0]["id"] == task["id"]
+        paused = client.patch(f"/api/scheduled-tasks/{task['id']}/enabled", json={"enabled": False})
+        assert paused.json()["status"] == "paused"
+        assert client.delete(f"/api/scheduled-tasks/{task['id']}").status_code == 204
+
+
+def test_web_downloads_local_data_backup_without_secrets(tmp_path):
+    client, *_ = make_client(tmp_path)
+    with client:
+        response = client.post("/api/data/backup")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "application/zip"
+        with zipfile.ZipFile(BytesIO(response.content)) as archive:
+            names = set(archive.namelist())
+            assert "companion.db" in names
+            assert "manifest.json" in names
+            assert all("secret" not in name.lower() for name in names)
+
+
+def test_web_role_template_export_and_import(tmp_path):
+    client, *_ = make_client(tmp_path)
+    with client:
+        created = client.post("/api/agents", json={"name": "模板角色", "personality": "沉稳"})
+        assert created.status_code == 201
+        source = created.json()
+        exported = client.get(f"/api/agents/{source['id']}/template")
+        assert exported.status_code == 200
+        payload = exported.json()
+        assert "messages" not in payload and "memories" not in payload
+        imported = client.post("/api/agents/import", json=payload)
+        assert imported.status_code == 201
+        assert imported.json()["agent"]["id"] != source["id"]
+        assert imported.json()["agent"]["personality"] == "沉稳"
+
+def test_web_can_retry_last_turn_without_duplicate_user_message(tmp_path):
+    client, _sessions, _store, provider_id, model_name = make_client(tmp_path)
+    with client:
+        first = client.post("/api/chat", json={
+            "message": "请重试我", "provider_id": provider_id, "model": model_name,
+        })
+        events = [json.loads(line[6:]) for line in first.text.splitlines() if line.startswith("data: ")]
+        conversation_id = next(item["conversation_id"] for item in events if item["type"] == "done")
+        retried = client.post("/api/chat", json={
+            "message": "", "conversation_id": conversation_id,
+            "provider_id": provider_id, "model": model_name, "regenerate": True,
+        })
+        assert retried.status_code == 200
+        rows = client.get(f"/api/conversations/{conversation_id}/messages").json()
+        assert [item["role"] for item in rows] == ["user", "assistant"]
+        assert rows[0]["content"] == "请重试我"
+
+
+def test_conversation_keeps_selected_provider_across_turns(tmp_path):
+    client, sessions, _store, first_provider_id, model_name = make_client(tmp_path)
+    with sessions() as db:
+        second = ProviderRepository().create(
+            db, name="Second", provider_type="openai", api_key_ref="env:SECOND_KEY"
+        )
+        second_provider_id = second.id
+    with client:
+        first = client.post("/api/chat", json={
+            "message": "使用第二个服务", "provider_id": second_provider_id, "model": model_name,
+        })
+        events = [json.loads(line[6:]) for line in first.text.splitlines() if line.startswith("data: ")]
+        conversation_id = next(item["conversation_id"] for item in events if item["type"] == "done")
+        followup = client.post("/api/chat", json={
+            "message": "继续使用当前模型", "conversation_id": conversation_id,
+        })
+        assert followup.status_code == 200
+        conversation = next(item for item in client.get("/api/conversations").json() if item["id"] == conversation_id)
+        assert conversation["provider_id"] == second_provider_id
+        assert conversation["provider_id"] != first_provider_id
+        assert conversation["model_id"] == model_name
+
+
+def test_failed_last_turn_is_restored_as_retryable_history(tmp_path):
+    client, sessions, _store, provider_id, model_name = make_client(tmp_path)
+    with client:
+        response = client.post("/api/chat", json={
+            "message": "失败后重试", "provider_id": provider_id, "model": model_name,
+        })
+        events = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")]
+        conversation_id = next(item["conversation_id"] for item in events if item["type"] == "done")
+        from sqlalchemy import select
+        from zhiyu.infrastructure.database.models import AgentRun, Message
+        with sessions() as db:
+            assistant = db.scalars(select(Message).where(
+                Message.conversation_id == conversation_id, Message.role == "assistant"
+            )).first()
+            run = db.scalars(select(AgentRun).where(
+                AgentRun.conversation_id == conversation_id
+            ).order_by(AgentRun.started_at.desc())).first()
+            run.status = "failed"
+            run.error = "模拟错误"
+            run.response_message_id = None
+            db.delete(assistant)
+            db.commit()
+        history = client.get(f"/api/conversations/{conversation_id}/messages").json()
+        assert history[-1]["role"] == "assistant"
+        assert history[-1]["error"] == "模拟错误"
+
+
+def test_web_avatar_upload_and_clear(tmp_path):
+    client, *_ = make_client(tmp_path)
+    with client:
+        agent = client.post("/api/agents", json={"name": "头像角色"}).json()
+        response = client.put(
+            f"/api/agents/{agent['id']}/avatar",
+            content=b"\x89PNG\r\n\x1a\ncontent",
+            headers={"Content-Type": "image/png"},
+        )
+        assert response.status_code == 200
+        assert response.json()["avatar"]
+        image = client.get(f"/api/agents/{agent['id']}/avatar")
+        assert image.status_code == 200
+        assert image.headers["content-type"] == "image/png"
+        assert image.content.startswith(b"\x89PNG")
+        assert client.put(
+            f"/api/agents/{agent['id']}/avatar",
+            content=b"<svg/>",
+            headers={"Content-Type": "image/svg+xml"},
+        ).status_code == 400
+        assert client.delete(f"/api/agents/{agent['id']}/avatar").status_code == 200
+        assert client.get(f"/api/agents/{agent['id']}/avatar").status_code == 404
 
 
 def test_web_can_delete_conversation(tmp_path):

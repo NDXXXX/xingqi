@@ -19,6 +19,8 @@ from zhiyu.infrastructure.database.repositories.identity_repository import Ident
 from zhiyu.infrastructure.database.repositories.memory_repository import MemoryRepository
 from zhiyu.core.memory.mutations import FileMutationManager
 from zhiyu.core.memory.retriever import derive_trigger_text
+from zhiyu.core.memory.scopes import is_shared_user_memory
+from zhiyu.infrastructure.database.repositories.identity_repository import LOCAL_IDENTITY_ID
 from zhiyu.core.memory.store import CORE_FILE, IDENTITY_FILE, USER_FILE, MemoryStore
 from zhiyu.core.memory.index_common import _entries_with_keys, _save_file_index
 
@@ -182,6 +184,15 @@ def rebuild_index(
                     type=entry.meta.get("type", "fact"),
                     content=entry.content,
                     identity_id=identity_id,
+                    shared=bool(
+                        context.get("shared", entry.meta.get("shared", False))
+                        or (
+                            identity_id == LOCAL_IDENTITY_ID
+                            and is_shared_user_memory(
+                                entry.meta.get("type", "fact"), relative
+                            )
+                        )
+                    ),
                     importance=_context_importance(
                         context, entry.meta.get("importance")
                     ),
@@ -226,6 +237,16 @@ def rebuild_index(
                 row,
                 content=entry.content,
                 type=entry.meta.get("type", row.type),
+                shared=bool(
+                    row.shared
+                    or entry.meta.get("shared", False)
+                    or (
+                        identity_id == LOCAL_IDENTITY_ID
+                        and is_shared_user_memory(
+                            entry.meta.get("type", row.type), relative
+                        )
+                    )
+                ),
                 line_start=entry.line_start,
                 line_end=entry.line_end,
                 content_hash=entry.hash,

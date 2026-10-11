@@ -16,6 +16,7 @@ from zhiyu.infrastructure.database.models import ForgottenConversation, Identity
 from zhiyu.infrastructure.database.repositories.conversation_repository import ConversationRepository
 from zhiyu.infrastructure.database.repositories.memory_repository import MemoryRepository
 from zhiyu.infrastructure.database.repositories.message_repository import MessageRepository
+from zhiyu.infrastructure.database.repositories.identity_repository import LOCAL_IDENTITY_ID
 from .retriever import _lexical_similarity, build_query_plan, normalize_text, retrieve
 
 _RECALL_RE = re.compile(
@@ -38,7 +39,7 @@ def deep_recall(
 ) -> str | None:
     """返回可注入的历史片段；无命中返回 None。"""
     parts: list[str] = []
-    episodic = MemoryRepository().list_owned(
+    episodic = MemoryRepository().list_visible(
         db, identity_id, tier="episodic", statuses=("active",)
     )
     forgotten = set(db.scalars(
@@ -54,11 +55,20 @@ def deep_recall(
         ))
         and item.id not in forgotten
     }
+    shared_conversations = {
+        item.id for item in ConversationRepository().list(db)
+        if item.channel == "local"
+        and (item.identity_id == LOCAL_IDENTITY_ID or item.character_id is not None)
+    }
     episodic = [
         item for item in episodic
         if item.trust in {"owner", "agent"}
         and item.promotion_status not in {"promoted", "rejected", "deferred"}
-        and (item.conversation_id is None or item.conversation_id in allowed_conversations)
+        and (
+            item.conversation_id is None
+            or item.conversation_id in allowed_conversations
+            or item.shared and item.conversation_id in shared_conversations
+        )
     ]
     hits = retrieve(query, episodic, top_k=3)
     if hits:

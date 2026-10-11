@@ -2,9 +2,12 @@
 
 import json
 
+from sqlalchemy import select
+
 from zhiyu.core.agent.run_manager import active_runs
 from zhiyu.core.recall import last_local_conversation, list_goals
 from zhiyu.infrastructure.database.db import SessionLocal
+from zhiyu.infrastructure.database.models import AgentRun
 from zhiyu.infrastructure.database.repositories.agent_run_repository import AgentRunRepository
 from zhiyu.infrastructure.database.repositories.conversation_repository import ConversationRepository
 from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository
@@ -36,6 +39,7 @@ class ConversationService:
                     "title": item.title,
                     "channel": item.channel,
                     "character_id": item.character_id,
+                    "provider_id": item.provider_id,
                     "model_id": item.model_id,
                     "created_at": item.created_at,
                     "updated_at": item.updated_at,
@@ -48,15 +52,36 @@ class ConversationService:
         with self.session_factory() as db:
             if self.conversations.get(db, conversation_id) is None:
                 return None
-            return [
+            messages = self.messages.list_by_conversation(db, conversation_id)
+            result = [
                 {
                     "id": item.id,
                     "role": item.role,
                     "content": item.content,
                     "created_at": item.created_at,
                 }
-                for item in self.messages.list_by_conversation(db, conversation_id)
+                for item in messages
             ]
+            if messages and messages[-1].role == "user":
+                failed_run = db.scalars(
+                    select(AgentRun)
+                    .where(
+                        AgentRun.conversation_id == conversation_id,
+                        AgentRun.status == "failed",
+                        AgentRun.response_message_id.is_(None),
+                        AgentRun.started_at >= messages[-1].created_at,
+                    )
+                    .order_by(AgentRun.started_at.desc())
+                ).first()
+                if failed_run is not None:
+                    result.append({
+                        "id": f"failed-{failed_run.id}",
+                        "role": "assistant",
+                        "content": "",
+                        "error": failed_run.error or "运行失败",
+                        "created_at": failed_run.finished_at or failed_run.started_at,
+                    })
+            return result
 
     def delete_conversation(self, conversation_id: str) -> bool:
         self.cancel_conversation_run(conversation_id)

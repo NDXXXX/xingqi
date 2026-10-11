@@ -26,6 +26,10 @@ class CharacterRepository:
         background: str | None = None,
         speaking_style: str | None = None,
         system_prompt: str | None = None,
+        opening_message: str | None = None,
+        world_setting: str | None = None,
+        initial_scene: str | None = None,
+        behavior_preferences: str | None = None,
         default_model_id: str | None = None,
     ) -> Character:
         character = Character(
@@ -37,6 +41,10 @@ class CharacterRepository:
             background=background,
             speaking_style=speaking_style,
             system_prompt=system_prompt,
+            opening_message=opening_message,
+            world_setting=world_setting,
+            initial_scene=initial_scene,
+            behavior_preferences=behavior_preferences,
             default_model_id=default_model_id,
         )
         db.add(character)

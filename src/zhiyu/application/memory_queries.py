@@ -24,7 +24,7 @@ class MemoryQueryService(MemoryOperations):
             statuses = None if include_inactive else ("active",)
             return [
                 _summary(db, item)
-                for item in self.memories.list_owned(db, identity_id, statuses=statuses, tier=tier)
+                for item in self.memories.list_visible(db, identity_id, statuses=statuses, tier=tier)
                 if include_inactive
                 or tier == "episodic"
                 or item.tier == "core"
@@ -40,7 +40,7 @@ class MemoryQueryService(MemoryOperations):
         with self.session_factory() as db:
             identity_id = self._identity(db).id
             self._sync(db, identity_id)
-            memories = self.memories.list_owned(
+            memories = self.memories.list_visible(
                 db, identity_id, statuses=None if include_inactive else ("active",), tier=tier
             )
             if include_inactive:
@@ -52,7 +52,7 @@ class MemoryQueryService(MemoryOperations):
         with self.session_factory() as db:
             identity_id = self._identity(db).id
             self._sync(db, identity_id)
-            memory = self.memories.get_owned(db, identity_id, memory_id)
+            memory = self.memories.get_visible(db, identity_id, memory_id)
             return _summary(db, memory) if memory is not None else None
 
     def recall_explain(self, query: str) -> dict:

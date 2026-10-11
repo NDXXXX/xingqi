@@ -7,7 +7,7 @@ from zhiyu.application.inbound import ChannelReliabilityService
 from zhiyu.infrastructure.database.db import SessionLocal
 
 from .base import ChannelAdapter
-from .messages import InboundEvent
+from .messages import InboundEvent, OutboundMessage
 from .qq.adapter import QQAdapter
 from .router import ChannelRouter
 
@@ -115,6 +115,12 @@ class ChannelManager:
         if adapter is not None:
             await adapter.stop()
         self._set_status(key, "disconnected")
+
+    async def send_private_message(self, channel_config_id: str, user_id: str, content: str):
+        adapter = self._adapters.get(channel_config_id)
+        if adapter is None:
+            raise ConnectionError("QQ 渠道当前未连接")
+        return await adapter.send(OutboundMessage.text(user_id, content))
 
     async def recover_once(self) -> int:
         recovered = 0

@@ -12,15 +12,20 @@ from fastapi.staticfiles import StaticFiles
 from zhiyu.api.routes.agent import build_agent_router
 from zhiyu.api.routes.assistant_profile import build_assistant_profile_router
 from zhiyu.api.routes.channels import build_channels_router
+from zhiyu.api.routes.data import build_data_router
 from zhiyu.api.routes.mcp import build_mcp_router
 from zhiyu.api.routes.memories import build_memories_router
 from zhiyu.api.routes.providers import build_provider_router
+from zhiyu.api.routes.scheduled_tasks import build_scheduled_tasks_router
 from zhiyu.api.routes.skills import build_skills_router
 from zhiyu.application.memories import MemoryService
 from zhiyu.application.assistant_profile import AssistantProfileService
 from zhiyu.application.providers import ProviderService
 from zhiyu.application.runtime import RuntimeHost
 from zhiyu.application.skills import SkillService
+from zhiyu.application.scheduled_tasks import ScheduledTaskService
+from zhiyu.application.data_archive import DataArchiveService
+from zhiyu.infrastructure.config.settings import settings
 
 
 def create_app(host: RuntimeHost | None = None) -> FastAPI:
@@ -32,6 +37,20 @@ def create_app(host: RuntimeHost | None = None) -> FastAPI:
     assistant_profile = AssistantProfileService(session_factory, store=store)
     providers = ProviderService(session_factory, router=runtime.chat_service.providers)
     skills = SkillService(session_factory)
+    scheduled_tasks = ScheduledTaskService(session_factory)
+    bind = session_factory.kw.get("bind")
+    database_url = getattr(bind, "url", None)
+    database_path = (
+        Path(database_url.database)
+        if database_url is not None
+        and database_url.drivername.startswith("sqlite")
+        and database_url.database not in (None, "", ":memory:")
+        else None
+    )
+    memory_dir = getattr(store, "dir", settings.memory_dir)
+    data_archive = DataArchiveService(
+        database_path, memory_dir, Path(memory_dir).parent / "avatars", engine=bind
+    )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -50,6 +69,8 @@ def create_app(host: RuntimeHost | None = None) -> FastAPI:
     app.include_router(build_agent_router(runtime))
     app.include_router(build_memories_router(memories))
     app.include_router(build_assistant_profile_router(assistant_profile))
+    app.include_router(build_scheduled_tasks_router(scheduled_tasks))
+    app.include_router(build_data_router(data_archive))
 
     @app.middleware("http")
     async def local_api_only(request: Request, call_next):

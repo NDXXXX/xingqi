@@ -56,8 +56,18 @@ def test_blank_workspaces_and_memory_lifecycle(workspace):
     factory, store, a, b = workspace
     services = [MemoryService(factory, store, scope) for scope in (None, a, b)]
     assert all(service.list() == [] for service in services)
-    default, first, second = [service.add(type="preference", content=f"用户喜欢{fruit}") for service, fruit in zip(services, ("苹果", "柚子", "樱桃"))]
-    assert [len(service.list()) for service in services] == [1, 1, 1]
+    default = services[0].add(type="preference", content="用户喜欢苹果")
+    first = services[1].add(type="relationship", content="山雀和用户一起看过海")
+    second = services[2].add(type="relationship", content="银杏和用户一起看过山")
+    assert [len(service.list()) for service in services] == [1, 2, 2]
+    other_conversation = conversation(factory, b)
+    with factory() as db:
+        prompt = with_agent_context(
+            db, db.get(Conversation, other_conversation), "用户喜欢苹果吗？",
+            [{"role": "user", "content": "用户喜欢苹果吗？"}], memory_store=store,
+        )[0]["content"]
+        assert "用户喜欢苹果" in prompt
+        assert "山雀和用户一起看过海" not in prompt
     assert services[1].get(second.id) is None
     assert services[0].get(first.id) is None
     for action in (services[2].edit, services[2].confirm, services[2].keep, services[2].forget):
@@ -67,18 +77,17 @@ def test_blank_workspaces_and_memory_lifecycle(workspace):
         row = MemoryRepository().get(db, first.id)
         assert row.identity_id == a and row.character_id == a
         assert a in row.file_path and b not in row.file_path
-        # Old global sharing cannot make a default record visible to an Agent.
-        MemoryRepository().get(db, default.id).shared = True
-        db.commit()
-        assert {row.id for row in MemoryRepository().list_visible(db, b)} == {second.id}
+        shared_row = MemoryRepository().get(db, default.id)
+        assert shared_row.identity_id == IdentityRepository().local(db).id and shared_row.shared
+        assert {row.id for row in MemoryRepository().list_visible(db, b)} == {default.id, second.id}
         for scope in (a, b):
             rebuild_index(db, store, scope)
     services[1].edit(first.id, content="用户喜欢柚子茶")
-    assert services[2].list()[0].content == "用户喜欢樱桃"
+    assert {item.content for item in services[2].list()} == {"用户喜欢苹果", "银杏和用户一起看过山"}
     assert services[1].clear() >= 1
-    assert services[1].list() == []
+    assert [item.id for item in services[1].list()] == [default.id]
     services[1].rebuild_index()
-    assert services[1].list() == []
+    assert [item.id for item in services[1].list()] == [default.id]
     assert services[2].get(second.id) is not None
 
 
@@ -109,7 +118,7 @@ def test_persona_bootstrap_and_history_are_scoped(workspace):
         assert "糯米" not in deep_recall(db, a, "我的猫叫什么")
 
 
-def test_existing_session_cannot_change_agent_and_delete_is_protected(workspace):
+def test_existing_session_cannot_change_agent_and_delete_cascades(workspace):
     factory, store, a, b = workspace
     first_id = conversation(factory, a)
     with factory() as db:
@@ -117,16 +126,16 @@ def test_existing_session_cannot_change_agent_and_delete_is_protected(workspace)
     chars = CharacterService(factory)
     with pytest.raises(ValueError, match="不能更换智能体"):
         chars.assign_to_conversation(first_id, b)
-    with pytest.raises(ValueError, match="先删除"):
-        chars.delete(a)
-    MemoryService(factory, store, b).add(type="fact", content="独立记忆")
-    with pytest.raises(ValueError, match="先删除"):
-        chars.delete(b)
-    chars.update(a, name="改名后的山雀")
+    chars = CharacterService(factory, memory_store=store)
+    chars.delete(a)
     with factory() as db:
-        assert db.get(Conversation, first_id).character_id == a
-        assert db.get(Identity, a).display_name == "改名后的山雀"
+        assert db.get(Character, a) is None
+        assert db.get(Conversation, first_id) is None
+    MemoryService(factory, store, b).add(type="relationship", content="独立记忆")
+    with factory() as db:
         assert db.get(Character, b).name == "银杏"
+        assert db.get(Identity, b).display_name == "银杏"
+    assert MemoryService(factory, store, b).list()[0].content == "独立记忆"
 
 
 def test_same_mcp_name_has_separate_configs_and_connections(workspace):
@@ -188,28 +197,29 @@ class ObservationProvider(AIProvider):
         return LLMResponse(content=json.dumps([{"type": "preference", "content": "用户喜欢柚子", "evidence": "喜欢柚子"}], ensure_ascii=False))
 
 
-async def test_extraction_tools_and_consolidation_keep_agent_scope(workspace):
+async def test_extraction_tools_share_user_facts_but_keep_role_scope(workspace):
     factory, store, a, b = workspace
     first_id = conversation(factory, a)
     manager = MemoryManager(store)
     with factory() as db:
-        message = MessageRepository().create(db, conversation_id=first_id, role="user", content="记住我喜欢柚子")
+        message = MessageRepository().create(db, conversation_id=first_id, role="user", content="我喜欢柚子")
         saved = await manager.extract_and_save(db, ObservationProvider(None), "fake", message.content, "", a, user_message_id=message.id)
-        assert saved and all(row.character_id == a for row in saved)
+        assert saved and all(row.identity_id == IdentityRepository().local(db).id and row.shared for row in saved)
+        shared_id = saved[0].id
         db.commit()
-    assert MemoryService(factory, store, b).list() == []
+    assert any(item.id == shared_id for item in MemoryService(factory, store, b).list())
     tools_a = build_tool_registry(McpManager(), session_factory=factory, identity_id=a, character_id=a, memory_store=store)
     tools_b = build_tool_registry(McpManager(), session_factory=factory, identity_id=b, character_id=b, memory_store=store)
     found = await tools_a.get("memory_search").execute("柚子")
     assert found["results"]
     memory_id = found["results"][0]["id"]
     assert (await tools_a.get("memory_get").execute(memory_id))["found"]
-    assert not (await tools_b.get("memory_get").execute(memory_id))["found"]
-    assert not (await tools_b.get("memory_search").execute("柚子"))["results"]
+    assert (await tools_b.get("memory_get").execute(memory_id))["found"]
+    assert (await tools_b.get("memory_search").execute("柚子"))["results"]
     processor = ConsolidationProcessor(factory, store)
     with factory() as db:
         assert processor._pending(db, b) == []
-        assert all(row.character_id == a for row in processor._pending(db, a))
+        assert processor._pending(db, IdentityRepository().local(db).id)
 
 
 async def test_job_snapshot_rejects_mismatched_workspace(workspace):
@@ -235,8 +245,12 @@ def test_web_create_select_and_scoped_management(tmp_path):
         a = first.json()["id"]
         b = client.post("/api/agents", json={"name": "另一个名字"}).json()["id"]
         assert client.get(f"/api/memories?character_id={a}").json() == []
+        assert client.get("/api/memory-settings").json() == {"auto_enabled": True}
+        assert client.put("/api/memory-settings", json={"enabled": False}).json() == {"auto_enabled": False}
+        assert client.get("/api/memory-settings").json() == {"auto_enabled": False}
+        client.put("/api/memory-settings", json={"enabled": True})
         assert client.get(f"/api/mcp/servers?character_id={b}").json() == []
-        memory = MemoryService(factory, store, a).add(type="fact", content="独立资料")
+        memory = MemoryService(factory, store, a).add(type="relationship", content="独立资料")
         assert client.get(f"/api/memories?character_id={a}").json()[0]["id"] == memory.id
         assert client.get(f"/api/memories?character_id={b}").json() == []
         assert client.delete(f"/api/memories/{memory.id}?character_id={b}").status_code == 404
@@ -252,3 +266,10 @@ def test_web_create_select_and_scoped_management(tmp_path):
         assert client.get("/api/reminders/recent").status_code == 404
         assert client.post(f"/api/memories/clear?character_id={a}").status_code == 200
         assert client.get(f"/api/conversations/{conv_id}/messages").json()
+        shared = MemoryService(factory, store).add(type="preference", content="默认助手共享用户资料")
+        MemoryService(factory, store, a).add(type="relationship", content="即将删除的角色资料")
+        assert client.delete(f"/api/agents/{a}").status_code == 200
+        assert client.get(f"/api/conversations/{conv_id}/messages").status_code == 404
+        assert client.get(f"/api/memories?character_id={a}").status_code == 404
+        assert MemoryService(factory, store).get(shared.id) is not None
+        assert {item["id"] for item in client.get("/api/agents").json()} == {b}

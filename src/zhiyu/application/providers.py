@@ -59,8 +59,10 @@ class ProviderService:
         self, *, base_url: str, model: str, api_key: str | None = None,
         api_key_env: str | None = None,
     ) -> None:
-        if bool(api_key) == bool(api_key_env):
-            raise ValueError("必须且只能提供 API Key 或 API Key 环境变量")
+        if api_key and api_key_env:
+            raise ValueError("API Key 与环境变量只能填写一个")
+        if not (api_key or api_key_env or base_url):
+            raise ValueError("请提供 API Key，或为本机/局域网模型填写 Base URL")
         ref = f"env:{api_key_env}" if api_key_env else "embedding"
         if api_key:
             self.secrets.set(ref, api_key)
@@ -130,7 +132,7 @@ class ProviderService:
                 old_ref = provider.api_key_ref if not (provider.api_key_ref or "").startswith("env:") else None
                 provider.api_key_ref = None
             try:
-                provider.base_url = base_url
+                provider.base_url = base_url.rstrip("/") if base_url else None
                 provider.enabled = enabled
                 if new_ref:
                     provider.api_key_ref = new_ref
@@ -246,15 +248,17 @@ class ProviderService:
     ) -> ProviderSummary:
         if provider_type not in PROVIDER_SPECS:
             raise ValueError(f"不支持的 Provider 类型: {provider_type}")
-        if bool(api_key) == bool(api_key_env):
-            raise ValueError("必须且只能提供 API Key 或 API Key 环境变量")
+        if api_key and api_key_env:
+            raise ValueError("API Key 与环境变量只能填写一个")
+        if not (api_key or api_key_env or base_url):
+            raise ValueError("请提供 API Key，或为本机/局域网模型填写 Base URL")
         if api_key_env and not os.getenv(api_key_env):
             raise ValueError(f"环境变量 {api_key_env} 未设置")
 
         with self.session_factory() as db:
             if self.providers.get_by_name(db, name):
                 raise ValueError("Provider 名称已存在")
-            secret_ref = f"env:{api_key_env}" if api_key_env else str(uuid4())
+            secret_ref = f"env:{api_key_env}" if api_key_env else str(uuid4()) if api_key else None
             if api_key:
                 self.secrets.set(secret_ref, api_key)
             try:
@@ -263,7 +267,7 @@ class ProviderService:
                     name=name,
                     provider_type=provider_type,
                     api_key_ref=secret_ref,
-                    base_url=base_url,
+                    base_url=base_url.rstrip("/") if base_url else None,
                 )
             except Exception:
                 if api_key:

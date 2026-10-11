@@ -6,6 +6,7 @@ import logging
 from zhiyu.core.memory.deep_recall import is_forgotten
 from zhiyu.core.memory.indexer import sync_changed_index
 from zhiyu.core.memory.manager import MemoryManager
+from zhiyu.core.memory.extractor import is_explicit_memory_request
 from zhiyu.core.providers.router import ProviderRouter, provider_router
 from zhiyu.infrastructure.database.db import SessionLocal
 from zhiyu.infrastructure.database.models import Conversation, Identity, Message
@@ -13,6 +14,7 @@ from zhiyu.infrastructure.database.repositories.memory_job_repository import Mem
 from zhiyu.infrastructure.database.repositories.memory_repository import MemoryRepository
 from zhiyu.infrastructure.database.repositories.message_repository import MessageRepository
 from zhiyu.infrastructure.database.repositories.provider_repository import ProviderRepository
+from zhiyu.infrastructure.database.repositories.setting_repository import SettingRepository
 
 
 logger = logging.getLogger(__name__)
@@ -172,6 +174,7 @@ class MemoryJobProcessor:
                 "assistant_message": assistant.content if assistant is not None else "",
                 "identity_id": job.identity_id,
                 "model": job.model,
+                "explicit": is_explicit_memory_request(user.content),
             }
 
         def should_apply() -> bool:
@@ -180,6 +183,12 @@ class MemoryJobProcessor:
                 return current is not None and current.status == "processing"
 
         try:
+            with self.session_factory() as db:
+                if not data["explicit"] and SettingRepository().get(db, "memory.auto_enabled") is False:
+                    current = self.jobs.get(db, job_id)
+                    if current is not None:
+                        self.jobs.finish(db, current, "cancelled")
+                    return "cancelled"
             if provider_config is None or not provider_config.enabled:
                 raise ValueError("任务对应的 Provider 不可用")
             client = self.providers.get_provider(provider_config)

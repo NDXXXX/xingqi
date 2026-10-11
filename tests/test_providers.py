@@ -144,3 +144,32 @@ async def test_provider_payloads_honor_max_output_tokens(monkeypatch):
 
     assert captured[0][1]["max_tokens"] == 321
     assert captured[1][1]["max_tokens"] == 654
+
+
+async def test_openai_compatible_local_endpoint_omits_empty_authorization(monkeypatch):
+    captured = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": "ok"}}]}
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, url, *, headers, json):
+            captured.append((url, headers, json))
+            return FakeResponse()
+
+    monkeypatch.setattr(openai_module.httpx, "AsyncClient", lambda **_kwargs: FakeClient())
+    provider = OpenAICompatibleProvider(api_key=None, base_url="http://127.0.0.1:11434/v1")
+    await provider.chat([{"role": "user", "content": "hello"}], model="local-model")
+
+    assert captured[0][0] == "http://127.0.0.1:11434/v1/chat/completions"
+    assert "Authorization" not in captured[0][1]

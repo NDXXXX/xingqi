@@ -41,6 +41,8 @@ def select_provider_model(
         provider = next((item for item in providers if item.id == requested_provider_id), None)
         if provider is None:
             raise ProviderSelectionError("指定的 Provider 不可用")
+    elif conversation.provider_id:
+        provider = next((item for item in providers if item.id == conversation.provider_id), None)
     elif conversation.model_id:
         provider = next(
             (

@@ -7,6 +7,11 @@ from zhiyu.core.providers.base import AIProvider
 
 MEMORY_TYPES = ("profile", "preference", "goal", "fact", "relationship", "project")
 MAX_OBSERVATIONS = 5
+_EXPLICIT_MEMORY_RE = re.compile(r"记住|记下来|帮我记")
+
+
+def is_explicit_memory_request(message: str) -> bool:
+    return bool(_EXPLICIT_MEMORY_RE.search(message))
 
 _OBSERVATION_PROMPT = """你是情景记忆提取器。只根据“本轮用户消息”判断用户明确表达、可能具有长期价值的信息，整理成若干条观察。
 

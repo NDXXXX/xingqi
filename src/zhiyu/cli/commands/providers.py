@@ -18,11 +18,11 @@ def handle_provider(args) -> None:
             print(f"{item.name} [{item.provider_type}] {status}: {', '.join(item.models)}")
     elif args.provider_command == "add":
         api_key = None
-        if not args.api_key_env:
+        if not args.api_key_env and (not args.base_url or sys.stdin.isatty()):
             if not sys.stdin.isatty():
                 raise ValueError("非交互环境请使用 --api-key-env")
-            api_key = getpass("API Key: ").strip()
-            if not api_key:
+            api_key = getpass("API Key（本机服务可留空）: ").strip() or None
+            if not api_key and not args.base_url:
                 raise ValueError("API Key 不能为空")
         created = service.add(
             name=args.name,

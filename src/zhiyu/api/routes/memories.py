@@ -3,10 +3,15 @@
 from dataclasses import asdict
 
 from fastapi import APIRouter, HTTPException, Query, Depends
+from pydantic import BaseModel
 from zhiyu.application.characters import CharacterService
 
 from zhiyu.api.schemas.agent import MemoryEditBody
 from zhiyu.application.memories import MemoryService
+
+
+class AutoMemoryBody(BaseModel):
+    enabled: bool
 
 
 def build_memories_router(memories: MemoryService) -> APIRouter:
@@ -16,6 +21,14 @@ def build_memories_router(memories: MemoryService) -> APIRouter:
         if character_id is not None and CharacterService(memories.session_factory).get(character_id) is None:
             raise HTTPException(404, "智能体不存在")
         return MemoryService(memories.session_factory, memories.store, character_id)
+
+    @router.get("/api/memory-settings")
+    async def memory_settings(service: MemoryService = Depends(scoped)):
+        return {"auto_enabled": service.auto_memory_enabled()}
+
+    @router.put("/api/memory-settings")
+    async def update_memory_settings(body: AutoMemoryBody, service: MemoryService = Depends(scoped)):
+        return {"auto_enabled": service.set_auto_memory_enabled(body.enabled)}
 
     @router.get("/api/memory-index-status")
     async def memory_index_status(service: MemoryService = Depends(scoped)):

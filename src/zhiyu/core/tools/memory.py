@@ -8,6 +8,7 @@ from zhiyu.core.memory.retriever import hybrid_rank, normalize_text
 from zhiyu.core.memory.store import IDENTITY_FILE, MemoryStore
 from zhiyu.infrastructure.database.models import MemoryRecallEvent
 from zhiyu.infrastructure.database.repositories.memory_repository import MemoryRepository
+from zhiyu.infrastructure.database.repositories.identity_repository import LOCAL_IDENTITY_ID
 
 from .base import AgentTool
 
@@ -31,9 +32,11 @@ class MemorySearchTool(AgentTool):
             return {"results": []}
         with self.session_factory() as db:
             sync_changed_index(db, self.store, self.identity_id)
+            if self.identity_id != LOCAL_IDENTITY_ID:
+                sync_changed_index(db, self.store, LOCAL_IDENTITY_ID)
             repo = MemoryRepository()
             memories = [
-                item for item in repo.list_owned(db, self.identity_id)
+                item for item in repo.list_visible(db, self.identity_id)
                 if not (item.file_path or "").endswith(IDENTITY_FILE)
                 and (item.tier == "core" or item.promotion_status not in {"promoted", "rejected", "deferred"})
             ]
@@ -84,11 +87,13 @@ class MemoryGetTool(AgentTool):
     async def execute(self, memory_id: str) -> dict:
         with self.session_factory() as db:
             sync_changed_index(db, self.store, self.identity_id)
-            memory = MemoryRepository().get_owned(db, self.identity_id, memory_id)
+            if self.identity_id != LOCAL_IDENTITY_ID:
+                sync_changed_index(db, self.store, LOCAL_IDENTITY_ID)
+            memory = MemoryRepository().get_visible(db, self.identity_id, memory_id)
             if memory is None or memory.status != "active" or not memory.file_path or not memory.entry_key:
                 return {"found": False}
             path = self.store.resolve_relative(memory.file_path)
-            if not self.store.is_managed_path(self.identity_id, path) or path.name == IDENTITY_FILE:
+            if not self.store.is_managed_path(memory.identity_id, path) or path.name == IDENTITY_FILE:
                 return {"found": False}
             entry = next(
                 (item for item in self.store.read_entries(path) if item.id == memory.entry_key),

@@ -1,7 +1,11 @@
 """CLI parsing and exit behavior."""
 
+from types import SimpleNamespace
+import sqlite3
+
 from zhiyu.cli import main as cli
 from zhiyu.cli.commands import chat, characters, providers
+from zhiyu.application.data_archive import DataArchiveService
 
 
 def test_doctor_exit_code(monkeypatch, capsys):
@@ -23,6 +27,41 @@ def test_serve_rejects_non_loopback_host(monkeypatch, capsys):
 
     assert cli.run(["serve", "--host", "0.0.0.0"]) == 2
     assert "仅允许监听本机回环地址" in capsys.readouterr().err
+
+
+def test_keyless_custom_base_url_provider_can_be_added_noninteractively(monkeypatch, capsys):
+    captured = {}
+    monkeypatch.setattr(cli, "upgrade_database", lambda: None)
+    monkeypatch.setattr(providers.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(providers, "getpass", lambda *_args: (_ for _ in ()).throw(AssertionError("unexpected prompt")))
+    monkeypatch.setattr(
+        providers.ProviderService,
+        "add",
+        lambda _self, **values: captured.update(values) or SimpleNamespace(name=values["name"], models=[]),
+    )
+
+    assert cli.run([
+        "provider", "add", "local", "--type", "openai",
+        "--base-url", "http://127.0.0.1:11434/v1",
+    ]) == 0
+    assert captured["api_key"] is None
+    assert captured["base_url"] == "http://127.0.0.1:11434/v1"
+    assert "已添加 local" in capsys.readouterr().out
+
+
+def test_cli_data_restore_builds_a_separate_data_directory(tmp_path, monkeypatch, capsys):
+    database = tmp_path / "source.db"
+    with sqlite3.connect(database) as db:
+        db.execute("CREATE TABLE items (name TEXT)")
+        db.execute("INSERT INTO items VALUES ('keep')")
+    service = DataArchiveService(database, tmp_path / "memory", tmp_path / "avatars")
+    archive = service.create(tmp_path / "backup.zip")
+    monkeypatch.setattr(cli, "upgrade_database", lambda: (_ for _ in ()).throw(AssertionError("restore must not touch active DB")))
+    target = tmp_path / "restored"
+    assert cli.run(["data", "restore", str(archive), "--target", str(target)]) == 0
+    with sqlite3.connect(target / "companion.db") as db:
+        assert db.execute("SELECT name FROM items").fetchone()[0] == "keep"
+    assert "已恢复到" in capsys.readouterr().out
 
 
 class _StubCharacterService:

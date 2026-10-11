@@ -10,13 +10,13 @@
 - **多个模型服务商**：内置 DeepSeek、OpenAI、Anthropic、MiniMax 和 Kimi Provider；支持配置自定义 API 地址、模型能力和故障切换顺序。
 - **Agent 工具**：内置计算器和日期时间工具；可以按需读取 Skill，并调用经用户授权的 MCP 工具。
 - **本地长期记忆**：记忆文件以 Markdown 保存在本机，SQLite 保存索引和状态；支持后台提取、检索、编辑、遗忘及索引恢复。
-- **多智能体**：自行创建智能体，配置名称、背景、性格、系统提示词和默认模型；每个智能体拥有独立会话、长期记忆、Skills 授权与 MCP 配置。默认助手继续保留。
+- **多智能体**：自行创建智能体，配置名称、背景、性格、系统提示词和默认模型；角色会话、关系与剧情记忆、Skills 授权和 MCP 配置按角色隔离，用户事实与偏好可跨角色共享。角色支持设定模板导入导出。
 - **插件**：Web 中统一管理 MCP 服务与 Skills；管理 MCP 工具、Resources、Prompts 和凭据，从本地或 Git 来源安装、检查和维护 Skills。MCP 工具需明确授权；Skill 安装不会执行其中的脚本。
 - **运行诊断**：检查 Python、数据库、数据目录、密钥存储和 Skills 状态。
 
 ## 快速开始
 
-需要 Python 3.12 或更新版本、[uv](https://docs.astral.sh/uv/) 和模型服务商的 API Key。
+需要 Python 3.12 或更新版本、[uv](https://docs.astral.sh/uv/) 和模型服务商的 API Key；本机或局域网兼容模型可不配置 API Key。
 
 ```bash
 # 在仓库目录执行
@@ -24,14 +24,19 @@ uv sync
 uv run zhiyu doctor
 ```
 
-创建 Provider 时，星栖会交互式读取 API Key 并存入系统密钥存储。也可以从环境变量读取：
+创建云端 Provider 时，星栖会交互式读取 API Key 并存入系统密钥存储。也可以从环境变量读取；本机或局域网 OpenAI 兼容服务可只填写 Base URL：
 
 ```bash
 export DEEPSEEK_API_KEY="你的 API Key"
 uv run zhiyu provider add deepseek --type deepseek --api-key-env DEEPSEEK_API_KEY
 uv run zhiyu provider default deepseek deepseek-chat
 uv run zhiyu provider test deepseek
+
+# 本机或局域网 OpenAI 兼容服务可省略 Key
+uv run zhiyu provider add local --type openai --base-url http://127.0.0.1:11434/v1
 ```
+
+添加本机 Provider 后，在 Web UI 的「模型服务」中配置本机实际提供的模型标识，再设为默认模型。
 
 配置完成后，在终端启动聊天。交互式终端默认进入 TUI；发送单条消息则直接返回：
 
@@ -42,7 +47,7 @@ uv run zhiyu chat "帮我整理今天的学习计划"
 
 TUI 中输入 `/stop` 可停止当前回复，输入 `/help` 查看其他命令。
 
-支持的 Provider 类型：`deepseek`、`openai`、`anthropic`、`minimax`、`kimi`。添加 Provider 时可用 `--base-url` 指定兼容 API 地址。执行 `uv run zhiyu --help` 或 `uv run zhiyu <命令> --help` 查看全部选项。
+支持的 Provider 类型：`deepseek`、`openai`、`anthropic`、`minimax`、`kimi`。添加 Provider 时可用 `--base-url` 指定兼容 API 地址；配合本机服务时可省略 API Key。执行 `uv run zhiyu --help` 或 `uv run zhiyu <命令> --help` 查看全部选项。
 
 ## Web UI
 
@@ -54,9 +59,9 @@ uv run zhiyu serve
 
 打开 <http://127.0.0.1:8765>。Web UI 默认只允许绑定本机回环地址，不应通过未经认证的反向代理暴露到公网。
 
-侧栏「智能体」可以创建、编辑智能体，设置角色和默认模型。通过「当前智能体」选择器切换，最近会话只显示该智能体的会话；历史会话的归属保持固定。新智能体从空白记忆和空集成授权开始。
+侧栏「智能体」可以创建、编辑智能体，设置角色和默认模型。通过「当前智能体」选择器切换，最近会话只显示该智能体的会话；历史会话的归属保持固定。可导出角色 JSON 模板或导入模板创建新角色；模板不包含聊天记录、记忆和密钥。
 
-选好智能体后，「关于彼此」「日记」「插件」管理它自己的记忆、Skills 与 MCP。默认助手的「关于彼此」继续管理身份、相处方式、共同记忆和初次认识；这些私人资料不会注入其他智能体。清空记忆会保留聊天记录，并阻止清空前的消息自动回填记忆。CLI / QQ 暂时沿用默认助手，尚无智能体选择入口。
+选好智能体后，「关于彼此」「日记」「插件」管理它的角色资料、记忆、Skills 与 MCP。用户事实和偏好可在默认助手及各角色间共享；角色关系和剧情记忆保持私有。清空角色记忆不会删除共享用户资料，也不会删除聊天记录。CLI / QQ 暂时沿用默认助手，尚无智能体选择入口。
 
 直接从本机脚本调用 `/api` 时，写请求（POST、PUT、PATCH、DELETE）需带 `X-Zhiyu-Request: 1` 请求头；GET 不需要。API 只接受本机回环连接与本机 Host，带 Origin/Referer 的写请求还需与页面同源。该请求头用于阻止浏览器跨站写入，不是身份认证。
 
@@ -148,7 +153,17 @@ QQ 图片可在明确启用模型视觉能力后发送给支持视觉输入的�
 | SQLite 数据库 | `~/.zhiyu/companion.db` |
 | Markdown 记忆 | `~/.zhiyu/memory/` |
 | 用户 Skills | `~/.zhiyu/skills/` |
+| 角色头像 | `~/.zhiyu/avatars/` |
 | 日志 | `~/.zhiyu/logs/zhiyu.log` |
+
+侧栏「数据」可下载数据库、Markdown 记忆和角色头像的备份。API Key、Token、Keychain 内容和本机 Skill 文件不包含在备份中。恢复时先在终端运行：
+
+```bash
+uv run zhiyu data restore /path/to/xingqi-backup.zip --target /path/to/xingqi-restored
+ZHIYU_DATA_DIR=/path/to/xingqi-restored uv run zhiyu serve
+```
+
+恢复会创建一个新的数据目录，不会覆盖当前数据；跨设备恢复后需重新配置密钥并重新安装本机 Skill。
 
 可通过环境变量配置：
 
@@ -187,13 +202,4 @@ web/             Web UI 静态资源
 
 ## 文档
 
-- [项目功能收尾与发布验收](docs/项目功能收尾设计方案.md)
-- [项目功能收尾验收记录（2026-10-08）](docs/项目功能收尾验收记录-2026-10-08.md)
-- [记忆索引基准结果（2026-10-08）](docs/记忆索引基准结果-2026-10-08.json)
-- [多智能体独立记忆设计与实施记录](docs/多角色独立记忆设计方案.md)
-- [CLI 对话交互设计](docs/CLI对话交互设计方案.md)
-- [记忆系统设计与实施记录](docs/OpenClaw式文件记忆系统重构设计方案.md)
-- [对齐 OpenClaw 记忆机制的设计与实施状态](docs/星栖对齐OpenClaw记忆机制设计方案.md)
-- [MCP 与 Skills 生命周期设计](docs/MCP与Skills生命周期管理设计方案.md)
-- [QQ 运行闭环与渠道能力](docs/QQ运行闭环与渠道能力完善设计方案.md)
-- [Web 管理台设计](docs/Web管理台完善设计方案.md)
+- [文档目录](docs/README.md)：按 PRD、技术设计、验收与基准、参考资料分类。

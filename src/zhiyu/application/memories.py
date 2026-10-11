@@ -11,6 +11,7 @@ from zhiyu.infrastructure.database.db import SessionLocal
 from sqlalchemy import delete
 from zhiyu.infrastructure.database.models import MemoryConsolidationRun, utcnow
 from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository
+from zhiyu.infrastructure.database.repositories.setting_repository import SettingRepository
 
 
 class MemoryService:
@@ -93,15 +94,27 @@ class MemoryService:
             identity.memory_reset_at = utcnow()
             self._lifecycle.jobs.cancel_pending(db, identity.id)
             db.commit()
-        items = self.list(include_inactive=True)
-        for item in items:
-            if self.get(item.id) is not None:
-                self.forget(item.id)
+            item_ids = [
+                item.id for item in self._lifecycle.memories.list_owned(
+                    db, identity_id, statuses=None
+                )
+            ]
+        for item_id in item_ids:
+            self.forget(item_id)
         self.store.clear_dreams(identity_id)
         with self.session_factory() as db:
             db.execute(delete(MemoryConsolidationRun).where(MemoryConsolidationRun.identity_id == identity_id))
             db.commit()
-        return len(items)
+        return len(item_ids)
+
+    def auto_memory_enabled(self) -> bool:
+        with self.session_factory() as db:
+            return SettingRepository().get(db, "memory.auto_enabled") is not False
+
+    def set_auto_memory_enabled(self, enabled: bool) -> bool:
+        with self.session_factory() as db:
+            SettingRepository().set(db, "memory.auto_enabled", enabled)
+        return enabled
 
     def rebuild_index(self) -> dict:
         with self.session_factory() as db:

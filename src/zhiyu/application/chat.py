@@ -26,6 +26,7 @@ from zhiyu.core.agent.run_manager import active_runs
 from zhiyu.core.tools.registry import ToolRegistry
 from zhiyu.core.agent.runtime import ProviderCandidate, run_agent, run_agent_stream
 from zhiyu.core.memory.manager import MemoryManager, extract_assistant_name
+from zhiyu.core.memory.extractor import is_explicit_memory_request
 from zhiyu.core.memory.store import MemoryStore
 from zhiyu.core.memory.indexer import sync_changed_index
 from zhiyu.application.memory_jobs import MemoryJobProcessor
@@ -210,7 +211,16 @@ class ChatService:
             raise ValueError(str(exc)) from exc
 
         if conversation_values is not None:
-            conversation = self.conversations.create(db, **conversation_values)
+            conversation = self.conversations.create(
+                db,
+                **conversation_values,
+                provider_id=provider.id,
+                model_id=model_config.model_name,
+            )
+        else:
+            conversation.provider_id = provider.id
+            conversation.model_id = model_config.model_name
+            db.commit()
 
         if request.regenerate:
             user_message = self.messages.prepare_regeneration(db, conversation.id)
@@ -271,7 +281,7 @@ class ChatService:
                 conversation.channel == "qq"
                 and conversation.external_conversation_type == "private"
             ))
-            and re.search(r"记住|记下来|帮我记", request.message)
+            and is_explicit_memory_request(request.message)
         ):
             try:
                 await memory_manager.extract_and_save(
@@ -595,8 +605,10 @@ class ChatService:
                         [TextPart(text=final_response).model_dump()], ensure_ascii=False
                     )
                 conversation = db.get(Conversation, prepared.conversation_id)
+                auto_memory_enabled = SettingRepository().get(db, "memory.auto_enabled") is not False
                 if (
                     not request.regenerate
+                    and (auto_memory_enabled or is_explicit_memory_request(request.message))
                     and prepared.identity_id
                     and conversation is not None
                     and (conversation.channel == "local" or (
@@ -616,6 +628,7 @@ class ChatService:
                 run_record = db.get(AgentRun, run_id)
                 finished_at = utcnow()
                 if conversation is not None:
+                    conversation.provider_id = final_provider_id
                     conversation.model_id = final_model
                     conversation.updated_at = finished_at
                 if run_record is None:

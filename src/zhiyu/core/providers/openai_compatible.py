@@ -29,7 +29,9 @@ class OpenAICompatibleProvider(AIProvider):
             payload["max_tokens"] = kwargs["max_output_tokens"]
         if tools:
             payload["tools"] = tools
-        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
 
         if not stream:
             async with httpx.AsyncClient(timeout=60.0, trust_env=False) as client:

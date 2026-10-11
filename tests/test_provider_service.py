@@ -42,6 +42,20 @@ def test_add_list_and_set_default_provider():
     assert default["provider_id"] == created.id
 
 
+def test_keyless_custom_base_url_is_a_configured_provider():
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine)
+    service = ProviderService(sessions, FakeSecrets())
+
+    created = service.add(
+        name="Local Ollama", provider_type="openai", base_url="http://127.0.0.1:11434/v1"
+    )
+
+    assert created.configured is True
+    assert service.detail("Local Ollama")["api_key_set"] is False
+
+
 def test_embedding_configuration_uses_secret_reference(monkeypatch):
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool

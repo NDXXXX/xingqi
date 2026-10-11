@@ -8,4 +8,6 @@ export type Page =
   | "plugins"
   | "diagnostics"
   | "about"
-  | "memory";
+  | "memory"
+  | "reminders"
+  | "data";

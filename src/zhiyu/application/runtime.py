@@ -6,10 +6,12 @@ import logging
 from sqlalchemy import select
 
 from zhiyu.application.chat import ChatService
+from zhiyu.application.characters import CharacterService
 from zhiyu.application.channels import ChannelService
 from zhiyu.application.consolidation_jobs import ConsolidationProcessor
 from zhiyu.application.mcp import CONFIG_REVISION_KEY, McpService
 from zhiyu.application.skills import SkillService
+from zhiyu.application.scheduled_task_jobs import ScheduledTaskProcessor
 from zhiyu.channels.media import MediaStore
 from zhiyu.channels.manager import ChannelManager
 from zhiyu.channels.router import ChannelRouter
@@ -62,6 +64,7 @@ class RuntimeHost:
         self._recovery_task: asyncio.Task | None = None
         self._integration_task: asyncio.Task | None = None
         self._dream_task: asyncio.Task | None = None
+        self._scheduled_task: asyncio.Task | None = None
         self._integration_revision: int | None = None
         self._skills_revision: int | None = None
         self.channel_start_errors: list[str] = []
@@ -74,6 +77,13 @@ class RuntimeHost:
         self.skill_service.register_existing()
         self.skill_registry.reload(self.skill_service.enabled_overrides())
         self.skill_service.purge_expired()
+        memory_manager = self.chat_service.memory_processor.memory_manager
+        store = getattr(memory_manager, "store", None)
+        if not isinstance(store, MemoryStore):
+            store = MemoryStore()
+        CharacterService.recover_deletions(
+            self.chat_service.session_factory, store
+        )
         self._sync_memory_indexes()
         if self.auto_connect_mcp and hasattr(self.mcp_manager, "reconcile"):
             await self._reconcile_integrations()
@@ -91,6 +101,11 @@ class RuntimeHost:
                 getattr(self.chat_service.memory_processor.memory_manager, "store", None),
             ).run_daily()
         )
+        self._scheduled_task = asyncio.create_task(
+            ScheduledTaskProcessor(
+                self.chat_service.session_factory, self.channel_service
+            ).run_forever()
+        )
         self.started = True
         if self.auto_connect_mcp:
             self._integration_task = asyncio.create_task(self._integration_loop())
@@ -99,7 +114,9 @@ class RuntimeHost:
 
     def _sync_memory_indexes(self) -> None:
         memory_manager = self.chat_service.memory_processor.memory_manager
-        store = getattr(memory_manager, "store", None) or MemoryStore()
+        store = getattr(memory_manager, "store", None)
+        if not isinstance(store, MemoryStore):
+            store = MemoryStore()
         try:
             with self.chat_service.session_factory() as db:
                 IdentityRepository().local(db)
@@ -136,6 +153,10 @@ class RuntimeHost:
             self._dream_task.cancel()
             await asyncio.gather(self._dream_task, return_exceptions=True)
             self._dream_task = None
+        if self._scheduled_task is not None:
+            self._scheduled_task.cancel()
+            await asyncio.gather(self._scheduled_task, return_exceptions=True)
+            self._scheduled_task = None
         if self._recovery_task is not None:
             self._recovery_task.cancel()
             await asyncio.gather(self._recovery_task, return_exceptions=True)

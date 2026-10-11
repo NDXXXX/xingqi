@@ -3,11 +3,16 @@
 import argparse
 import asyncio
 import ipaddress
+import os
+from pathlib import Path
+import shlex
 import sys
+from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 
 from zhiyu.application.doctor import run_checks
+from zhiyu.application.data_archive import DataArchiveService
 from zhiyu.cli.commands.chat import _chat_line, _chat_tui
 from zhiyu.cli.commands.channels import _qq
 from zhiyu.cli.commands.characters import _character
@@ -16,6 +21,8 @@ from zhiyu.cli.commands.memories import _dream, _memory
 from zhiyu.cli.commands.providers import handle_provider as _provider
 from zhiyu.infrastructure.config.logging import configure_logging
 from zhiyu.infrastructure.database.migrations import upgrade_database
+from zhiyu.infrastructure.config.settings import settings
+from zhiyu.infrastructure.database.db import engine
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -41,7 +48,7 @@ def _parser() -> argparse.ArgumentParser:
     provider_add = provider_sub.add_parser("add", help="添加 Provider")
     provider_add.add_argument("name")
     provider_add.add_argument("--type", required=True, dest="provider_type")
-    provider_add.add_argument("--base-url")
+    provider_add.add_argument("--base-url", help="兼容 API 地址；本机服务可单独填写且不配置 API Key")
     provider_add.add_argument("--api-key-env", help="从环境变量读取 API Key")
     provider_test = provider_sub.add_parser("test", help="测试 Provider")
     provider_test.add_argument("name")
@@ -73,6 +80,14 @@ def _parser() -> argparse.ArgumentParser:
     character_add.add_argument("--system-prompt", help="设置后覆盖以上字段")
     character_delete = character_sub.add_parser("delete", help="删除角色")
     character_delete.add_argument("id")
+
+    data = sub.add_parser("data", help="备份和恢复本地数据")
+    data_sub = data.add_subparsers(dest="data_command", required=True)
+    data_backup = data_sub.add_parser("backup", help="创建本机数据备份")
+    data_backup.add_argument("--output", type=Path, help="备份 ZIP 保存路径")
+    data_restore = data_sub.add_parser("restore", help="恢复到一个新的数据目录")
+    data_restore.add_argument("archive", type=Path, help="星栖数据备份 ZIP")
+    data_restore.add_argument("--target", required=True, type=Path, help="尚不存在的目标数据目录")
 
     memory = sub.add_parser("memory", help="管理本地用户记忆")
     memory_sub = memory.add_subparsers(dest="memory_command", required=True)
@@ -293,6 +308,10 @@ def run(argv: list[str] | None = None) -> int:
             print("数据库已升级")
             return 0
 
+        if args.command == "data" and args.data_command == "restore":
+            _data(args)
+            return 0
+
         upgrade_database()
         if args.command == "doctor":
             checks = run_checks()
@@ -309,6 +328,8 @@ def run(argv: list[str] | None = None) -> int:
                 asyncio.run(_chat_line(args))
         elif args.command == "character":
             _character(args)
+        elif args.command == "data":
+            _data(args)
         elif args.command == "memory":
             _memory(args)
         elif args.command == "provider":
@@ -338,6 +359,32 @@ def run(argv: list[str] | None = None) -> int:
             raise
         print(f"运行失败：{exc}", file=sys.stderr)
         return 1
+
+
+def _data(args) -> None:
+    database_url = engine.url
+    database_path = (
+        Path(database_url.database)
+        if database_url.drivername.startswith("sqlite")
+        and database_url.database not in (None, "", ":memory:")
+        else None
+    )
+    service = DataArchiveService(
+        database_path, settings.memory_dir, settings.data_dir / "avatars", engine=engine
+    )
+    if args.data_command == "backup":
+        output = args.output or (
+            settings.data_dir / "backups" /
+            f"xingqi-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.zip"
+        )
+        print(service.create(output))
+        return
+    target = service.restore_to(args.archive, args.target)
+    print(f"数据已恢复到：{target}")
+    if os.name == "nt":
+        print(f'启动命令：$env:ZHIYU_DATA_DIR="{target}"; zhiyu serve')
+    else:
+        print(f"启动命令：ZHIYU_DATA_DIR={shlex.quote(str(target))} zhiyu serve")
 
 def main() -> None:
     raise SystemExit(run())

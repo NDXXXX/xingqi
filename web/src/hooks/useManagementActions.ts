@@ -16,7 +16,7 @@ export function useManagementActions(
   const addProvider = useCallback(async () => {
     const values = await dialog.form(
       "添加模型服务",
-      "API Key 不会再次显示。",
+      "云端服务填写 API Key；本机或局域网兼容服务可留空，但需填写 Base URL。密钥不会再次显示。",
       [
         { name: "name", label: "Provider 名称", required: true, placeholder: "例如 deepseek" },
         {

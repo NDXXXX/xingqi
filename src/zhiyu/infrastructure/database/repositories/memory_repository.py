@@ -6,6 +6,8 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from ..models import Identity, Memory, utcnow
+from .identity_repository import LOCAL_IDENTITY_ID
+from zhiyu.core.memory.scopes import is_shared_user_memory
 
 
 class MemoryRepository:
@@ -21,9 +23,13 @@ class MemoryRepository:
         if not identity_id:
             raise ValueError("读取记忆必须指定身份")
         condition = Memory.identity_id == identity_id
-        identity = db.get(Identity, identity_id)
-        if include_shared and (identity is None or identity.channel != "agent"):
-            condition = or_(condition, (Memory.shared.is_(True) & Memory.character_id.is_(None)))
+        if include_shared:
+            condition = or_(
+                condition,
+                (Memory.identity_id == LOCAL_IDENTITY_ID)
+                & Memory.shared.is_(True)
+                & Memory.character_id.is_(None),
+            )
         query = select(Memory).where(condition)
         if statuses is not None:
             query = query.where(Memory.status.in_(statuses))
@@ -61,10 +67,25 @@ class MemoryRepository:
             select(Memory).where(Memory.id == memory_id, Memory.identity_id == identity_id)
         ).first()
 
+    def get_visible(self, db: Session, identity_id: str, memory_id: str) -> Memory | None:
+        if not identity_id:
+            raise ValueError("读取记忆必须指定身份")
+        return db.scalars(
+            select(Memory).where(
+                Memory.id == memory_id,
+                or_(
+                    Memory.identity_id == identity_id,
+                    (Memory.identity_id == LOCAL_IDENTITY_ID)
+                    & Memory.shared.is_(True)
+                    & Memory.character_id.is_(None),
+                ),
+            )
+        ).first()
+
     def has_source_action(self, db: Session, identity_id: str, message_id: str) -> bool:
         return db.scalars(
             select(Memory.id).where(
-                Memory.identity_id == identity_id,
+                Memory.identity_id.in_((identity_id, LOCAL_IDENTITY_ID)),
                 or_(
                     Memory.source_message_id == message_id,
                     Memory.status_source_message_id == message_id,
@@ -107,6 +128,11 @@ class MemoryRepository:
         character_id = identity.external_user_id if identity and identity.channel == "agent" else None
         if character_id and shared:
             raise ValueError("智能体记忆不支持共享")
+        shared = shared or (
+            identity_id == LOCAL_IDENTITY_ID
+            and character_id is None
+            and is_shared_user_memory(type, file_path)
+        )
         memory = Memory(
             id=str(uuid4()),
             user_id=user_id,

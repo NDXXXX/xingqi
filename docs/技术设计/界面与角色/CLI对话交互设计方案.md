@@ -4,7 +4,7 @@
 > 日期：2026-09-29  
 > 状态：Phase 1 已实施，Phase 2/3 未开始  
 > 定位：CLI 优先阶段，把 `zhiyu chat` 从"纯文本流"升级为"结构化回合"  
-> 上游文档：[CLI 优先开发设计方案](CLI优先开发设计方案.md)
+> 上游文档：[CLI 优先开发设计方案](../架构与运行/CLI优先开发设计方案.md)
 
 ## 1. 结论
 
@@ -31,18 +31,18 @@
 
 代码事实：
 
-- [_chat](src/zhiyu/cli/main.py#L132) 维护 `input("你> ")` 循环，斜杠命令在这里分流。
-- [_send](src/zhiyu/cli/main.py#L83) 消费 `ChatService.run` 的事件流，但**只处理 `chunk` 和 `done`**（[main.py:100-103](src/zhiyu/cli/main.py#L100-L103)），`step` / `tool` 事件被静默丢弃。
+- [_chat](../../../src/zhiyu/cli/main.py#L132) 维护 `input("你> ")` 循环，斜杠命令在这里分流。
+- [_send](../../../src/zhiyu/cli/main.py#L83) 消费 `ChatService.run` 的事件流，但**只处理 `chunk` 和 `done`**（[main.py:100-103](../../../src/zhiyu/cli/main.py#L100-L103)），`step` / `tool` 事件被静默丢弃。
 
 ### 2.2 三个体验问题
 
 1. **无颜色**：`你>` 与 `星栖>` 同色，多轮后难分彼此。
 2. **思考时像卡住**：`星栖>` 先打印，模型思考或调工具期间一片空白。
-3. **工具调用不可见**：运行时其实会发 `tool` 事件（[runtime.py:106-113](src/zhiyu/core/agent/runtime.py#L106-L113)），但 CLI 丢掉，用户只看到"停顿几秒 → 直接出答案"。
+3. **工具调用不可见**：运行时其实会发 `tool` 事件（[runtime.py:106-113](../../../src/zhiyu/core/agent/runtime.py#L106-L113)），但 CLI 丢掉，用户只看到"停顿几秒 → 直接出答案"。
 
 ### 2.3 关键发现：思考块目前没有数据源
 
-OpenClaw 的 thinking 块来自模型暴露的推理内容（DeepSeek reasoner 的 `reasoning_content`、Claude 的 extended thinking）。当前 Provider 层在流式与解析时**只提取 `content` 和 `tool_calls`**，[openai_compatible.py](src/zhiyu/core/providers/openai_compatible.py) 的 `_stream` 没有读 `reasoning_content`，`LLMResponse`（[base.py](src/zhiyu/core/providers/base.py)）也没有对应字段。
+OpenClaw 的 thinking 块来自模型暴露的推理内容（DeepSeek reasoner 的 `reasoning_content`、Claude 的 extended thinking）。当前 Provider 层在流式与解析时**只提取 `content` 和 `tool_calls`**，[openai_compatible.py](../../../src/zhiyu/core/providers/openai_compatible.py) 的 `_stream` 没有读 `reasoning_content`，`LLMResponse`（[base.py](../../../src/zhiyu/core/providers/base.py)）也没有对应字段。
 
 所以思考块不是"开关没打开"，而是**数据根本没进来**。工具卡片可以立刻做，思考块必须先补推理捕获。
 
@@ -68,7 +68,7 @@ kind-aware 那行：星栖内置工具只有 `calculator` / `datetime`，输入�
 2. 若本轮有工具调用，工具卡片**另起一行**、缩进两个空格逐张打印。
 3. 正文开始前，若前面已有工具卡片，则**再打一次 `星栖>`** 前缀，正文接在后面流式输出。
 
-即"有工具时 `星栖>` 出现两次，一次引工具、一次引正文"；无工具时只出现一次。当前代码只在进 `_send` 前打一次前缀（[main.py:178](src/zhiyu/cli/main.py#L178)），所以 `_send` 需要知道"首个 chunk 到来时是否已打印过工具卡片"，来决定是否补前缀与换行。
+即"有工具时 `星栖>` 出现两次，一次引工具、一次引正文"；无工具时只出现一次。当前代码只在进 `_send` 前打一次前缀（[main.py:178](../../../src/zhiyu/cli/main.py#L178)），所以 `_send` 需要知道"首个 chunk 到来时是否已打印过工具卡片"，来决定是否补前缀与换行。
 
 ### 4.2 默认（`/verbose off`，工具单行）
 
@@ -127,7 +127,7 @@ kind-aware 那行：星栖内置工具只有 `calculator` / `datetime`，输入�
 
 ## 5. 事件流映射
 
-现有运行时事件（[runtime.py](src/zhiyu/core/agent/runtime.py)）到界面的映射：
+现有运行时事件（[runtime.py](../../../src/zhiyu/core/agent/runtime.py)）到界面的映射：
 
 | 事件 `type` | 载荷 | 渲染 | 现状 |
 |---|---|---|---|
@@ -184,7 +184,7 @@ kind-aware 那行：星栖内置工具只有 `calculator` / `datetime`，输入�
 |---|---|
 | 事件渲染 | 把 `_send` 里的事件分发抽成可测函数，喂 `chunk`/`tool`/`done` 序列，断言输出文本；含"有工具时正文前补一次 `星栖>`" |
 | 颜色开关 | 非 TTY 时输出不含 `\033[`（断言不出现）；TTY 时含。颜色判定集中到一个函数，测试时替换它 |
-| 斜杠命令 | `/verbose`、`/tools` 状态切换（沿用 [test_cli.py](../tests/test_cli.py) 里替换 `input()` 的模式） |
+| 斜杠命令 | `/verbose`、`/tools` 状态切换（沿用 [test_cli.py](../../../tests/test_cli.py) 里替换 `input()` 的模式） |
 | 单条模式 | `show_tools=False` 时喂 `tool` 事件，断言无 `⚙` 输出 |
 | Provider 推理 | Phase 3 时，mock 一段含 `reasoning_content` 的流，断言 `LLMResponse.reasoning` 被填对 |
 

@@ -42,6 +42,6 @@ AstrBot 这条路线通过 aiocqhttp 接入 OneBot v11。适配器以 `use_ws_re
 
 ## 与现有设计方案的关系
 
-`docs/QQ接入设计方案.md` 规划了官方 Bot 与 OneBot 双驱动。本次只验证 OneBot 路线，不改变官方 Bot 的产品取舍，也不把此前方案中的扫码、SDK、Gateway Resume 等描述视为已验证能力。
+早期曾规划官方 Bot 与 OneBot 双驱动；该规划未实施并已移除。本记录只核实 OneBot 路线，不把扫码、SDK、Gateway Resume 等能力视为已实现。
 
 当前优先继续验证反向 OneBot 文本链路；富媒体、官方 Bot 和多账号均是独立的后续范围。无需引入整个 AstrBot 框架即可采用消息标准化、收发解耦和会话隔离的设计。

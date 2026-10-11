@@ -241,6 +241,21 @@ class ChannelService:
     def list_deliveries(self, limit: int = 50) -> list[dict]:
         return self.manager.reliability.list_deliveries(limit)
 
+    async def send_scheduled_private_message(
+        self, channel_config_id: str, target_user_id: str, content: str
+    ):
+        with self.session_factory() as db:
+            current = self.configs.get_by_id(db, channel_config_id)
+            if (
+                current is None
+                or not current.enabled
+                or current.owner_user_id != target_user_id
+            ):
+                raise ValueError("QQ 提醒目标与当前主人配置不一致")
+        return await self.manager.send_private_message(
+            channel_config_id, target_user_id, content
+        )
+
     def retry_delivery(self, delivery_id: str, *, allow_unknown: bool = False) -> str:
         return self.manager.reliability.queue_delivery_retry(
             delivery_id, allow_unknown=allow_unknown

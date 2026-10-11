@@ -19,11 +19,13 @@ from zhiyu.infrastructure.database.models import (
 from zhiyu.infrastructure.database.repositories.memory_repository import MemoryRepository
 from zhiyu.core.providers.base import AIProvider
 from zhiyu.core.providers.embedding import embed_and_store
-from .extractor import extract_observations
+from .extractor import extract_observations, is_explicit_memory_request
 from .mutations import FileMutationManager
 from .retriever import _lexical_similarity, derive_trigger_text
+from .scopes import SHARED_USER_MEMORY_TYPES
 from .safety import contains_secret
 from .store import IDENTITY_FILE, MemoryStore
+from zhiyu.infrastructure.database.repositories.identity_repository import LOCAL_IDENTITY_ID
 
 _ASSISTANT_NAME_RE = re.compile(
     r"^\s*(?:(?:以后|从现在起)[，, ]*)?"
@@ -172,7 +174,7 @@ class MemoryManager:
 
         changed: list[Memory] = []
         seen: set[tuple[str, str]] = set()
-        explicit_request = bool(re.search(r"记住|记下来|帮我记", user_msg))
+        explicit_request = is_explicit_memory_request(user_msg)
         try:
             for observation in observations:
                 if observation["evidence"] not in user_msg:
@@ -183,39 +185,60 @@ class MemoryManager:
                 if key in seen:
                     continue
                 seen.add(key)
+                is_shared = observation["type"] in SHARED_USER_MEMORY_TYPES
+                target_identity_id = (
+                    LOCAL_IDENTITY_ID
+                    if is_shared and identity is not None and identity.channel in {"local", "agent"}
+                    else identity_id
+                )
+                if target_identity_id != identity_id:
+                    if db.get(Identity, target_identity_id) is None:
+                        db.add(Identity(
+                            id=LOCAL_IDENTITY_ID,
+                            channel="local",
+                            external_user_id="local-user",
+                            display_name="Local User",
+                        ))
+                        db.flush()
+                    from .indexer import sync_changed_index
+
+                    sync_changed_index(db, self.store, target_identity_id)
                 if explicit_request:
                     changed.append(
                         self._write_explicit_core(
                             db,
-                            identity_id,
+                            target_identity_id,
                             observation,
                             user_message_id,
                             conversation_id,
+                            shared=is_shared and target_identity_id == LOCAL_IDENTITY_ID,
                         )
                     )
                     continue
                 corrected = self._apply_explicit_correction(
                     db,
-                    identity_id,
+                    target_identity_id,
                     observation,
                     user_msg,
                     user_message_id,
                     conversation_id,
+                    shared=is_shared and target_identity_id == LOCAL_IDENTITY_ID,
                 )
                 if corrected is None:
                     written = self._write_episodic(
                         db,
-                        identity_id,
+                        target_identity_id,
                         observation,
                         user_message_id,
                         conversation_id,
+                        shared=is_shared and target_identity_id == LOCAL_IDENTITY_ID,
                     )
                     self._reopen_related_candidates(
-                        db, identity_id, written, observation
+                        db, target_identity_id, written, observation
                     )
                     self._refresh_active_work(
                         db,
-                        identity_id,
+                        target_identity_id,
                         observation,
                         user_message_id,
                         conversation_id,
@@ -239,6 +262,8 @@ class MemoryManager:
         observation: dict,
         user_message_id: str | None,
         conversation_id: str | None,
+        *,
+        shared: bool = False,
     ) -> Memory:
         candidates = [
             item
@@ -263,7 +288,7 @@ class MemoryManager:
                 path,
                 old.entry_key,
                 observation["content"],
-                meta={"type": observation["type"]},
+                meta={"type": observation["type"], "shared": shared},
                 context={
                     "origin": "automatic",
                     "tier": "core",
@@ -272,6 +297,7 @@ class MemoryManager:
                     "source_message_id": user_message_id,
                     "conversation_id": conversation_id,
                     "supersedes_id": old.id,
+                    "shared": shared,
                 },
             )
             replacement = self.repo.create(
@@ -279,6 +305,7 @@ class MemoryManager:
                 type=observation["type"],
                 content=entry.content,
                 identity_id=identity_id,
+                shared=shared,
                 origin="automatic",
                 tier="core",
                 trust="owner",
@@ -325,7 +352,7 @@ class MemoryManager:
             identity_id,
             path,
             observation["content"],
-            meta={"type": observation["type"]},
+            meta={"type": observation["type"], "shared": shared},
             context={
                 "origin": "automatic",
                 "tier": "core",
@@ -333,6 +360,7 @@ class MemoryManager:
                 "source_kind": "message",
                 "source_message_id": user_message_id,
                 "conversation_id": conversation_id,
+                "shared": shared,
             },
         )
         memory = self.repo.create(
@@ -340,6 +368,7 @@ class MemoryManager:
             type=observation["type"],
             content=entry.content,
             identity_id=identity_id,
+            shared=shared,
             origin="automatic",
             tier="core",
             trust="owner",
@@ -431,6 +460,8 @@ class MemoryManager:
         observation: dict,
         user_message_id: str | None,
         conversation_id: str | None,
+        *,
+        shared: bool = False,
     ) -> Memory:
         path = self.store.daily_path(identity_id=identity_id)
         entry, mutation = self.mutations.append(
@@ -438,7 +469,7 @@ class MemoryManager:
             identity_id,
             path,
             observation["content"],
-            meta={"type": observation["type"]},
+            meta={"type": observation["type"], "shared": shared},
             context={
                 "origin": "automatic",
                 "tier": "episodic",
@@ -447,6 +478,7 @@ class MemoryManager:
                 "promotion_status": "pending",
                 "source_message_id": user_message_id,
                 "conversation_id": conversation_id,
+                "shared": shared,
             },
         )
         memory = self.repo.create(
@@ -454,6 +486,7 @@ class MemoryManager:
             type=observation["type"],
             content=entry.content,
             identity_id=identity_id,
+            shared=shared,
             source_message_id=user_message_id,
             tier="episodic",
             trust="agent",
@@ -478,6 +511,8 @@ class MemoryManager:
         user_message: str,
         user_message_id: str | None,
         conversation_id: str | None,
+        *,
+        shared: bool = False,
     ) -> Memory | None:
         """明确改口且只对应一个核心条目时立即替换；含糊时仍走 episodic。"""
         if observation["type"] not in {"profile", "preference", "fact", "relationship"}:
@@ -504,7 +539,7 @@ class MemoryManager:
             path,
             old.entry_key,
             observation["content"],
-            meta={"type": observation["type"]},
+            meta={"type": observation["type"], "shared": shared},
             context={
                 "origin": "automatic",
                 "tier": "core",
@@ -514,6 +549,7 @@ class MemoryManager:
                 "source_message_id": user_message_id,
                 "conversation_id": conversation_id,
                 "supersedes_id": old.id,
+                "shared": shared,
             },
         )
         replacement = self.repo.create(
@@ -521,6 +557,7 @@ class MemoryManager:
             type=observation["type"],
             content=entry.content,
             identity_id=identity_id,
+            shared=shared,
             source_message_id=user_message_id,
             supersedes_id=old.id,
             origin="automatic",

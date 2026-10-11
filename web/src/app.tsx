@@ -15,6 +15,7 @@ import { ChatPage } from "./pages/ChatPage";
 import { MemoryPage } from "./pages/MemoryPage";
 import { AboutEachOtherPage } from "./pages/AboutEachOtherPage";
 import { useChatSession } from "./hooks/useChatSession";
+import { isLocalInferenceEndpoint } from "./modelPrivacy";
 import { useManagementActions } from "./hooks/useManagementActions";
 import { OverviewPage } from "./pages/OverviewPage";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
@@ -22,6 +23,8 @@ import { ProvidersPage } from "./pages/ProvidersPage";
 import { ChannelsPage } from "./pages/ChannelsPage";
 import { McpPage } from "./pages/McpPage";
 import { SkillsPage } from "./pages/SkillsPage";
+import { RemindersPage } from "./pages/RemindersPage";
+import { DataPage } from "./pages/DataPage";
 import type { Item, Page } from "./types";
 import "./app.css";
 
@@ -35,6 +38,8 @@ const nav: { id: Page; icon: string; label: string }[] = [
   { id: "plugins", icon: "◇", label: "插件" },
   { id: "diagnostics", icon: "⌘", label: "运行诊断" },
   { id: "memory", icon: "✳", label: "日记" },
+  { id: "reminders", icon: "◷", label: "提醒" },
+  { id: "data", icon: "▤", label: "数据" },
 ];
 const titles: Record<Page, string> = {
   overview: "运行总览",
@@ -46,6 +51,8 @@ const titles: Record<Page, string> = {
   diagnostics: "运行诊断",
   about: "关于彼此",
   memory: "日记",
+  reminders: "提醒",
+  data: "数据",
 };
 const safe = async <T,>(promise: Promise<T>): Promise<ApiResult<T>> => {
   try {
@@ -73,6 +80,9 @@ function App() {
   > | null>(null);
   const [overviewLoading, setOverviewLoading] = useState(true);
   const [conversations, setConversations] = useState<Item[]>([]);
+  const [chatModels, setChatModels] = useState<Item[]>([]);
+  const [selectedModelKey, setSelectedModelKey] = useState("");
+  const modelChoiceDirty = useRef(false);
   const conversationsRef = useRef<Item[]>([]);
   conversationsRef.current = conversations;
   const [conversationId, setConversationId] = useState<string | null>(() =>
@@ -85,6 +95,27 @@ function App() {
   const [characterId, setCharacterId] = useState<string | null>(() => new URLSearchParams(location.search).get("agent"));
   const currentAgent = agents.find((item) => item.id === characterId);
   const agentName = currentAgent?.name || "星栖";
+  const selectedModel = chatModels.find((item) => item.id === selectedModelKey);
+  const disclosureModel = selectedModel ||
+    chatModels.find((item) => item.id === currentAgent?.default_model_id) ||
+    chatModels.find((item) => item.provider_name === overview?.model?.provider && item.model_name === overview?.model?.model);
+  const loadChatModels = useCallback(async () => {
+    const providers = await request<Item[]>("/api/providers");
+    const details = await Promise.all(providers
+      .filter((provider) => provider.enabled && provider.configured)
+      .map((provider) => request<Item>(`/api/providers/${encodeURIComponent(provider.name)}`)));
+    const values = details.flatMap((provider) => (provider.models || [])
+      .filter((model: Item) => model.enabled)
+      .map((model: Item) => ({ ...model, provider_id: provider.id, provider_name: provider.name, base_url: provider.base_url })));
+    setChatModels(values);
+    setSelectedModelKey((current) => values.some((model) => model.id === current) ? current : "");
+    return values;
+  }, []);
+  const modelKeyForConversation = useCallback((conversation: Item | undefined, models = chatModels) => {
+    if (!conversation?.model_id) return "";
+    return models.find((model) => model.model_name === conversation.model_id &&
+      (!conversation.provider_id || model.provider_id === conversation.provider_id))?.id || "";
+  }, [chatModels]);
   const refreshAgents = useCallback(async () => setAgents(await request<Item[]>("/api/agents")), []);
   const conversationLoadRef = useRef(0);
 
@@ -154,6 +185,7 @@ function App() {
     activity,
     setActivity,
     sendMessage,
+    retryLast,
     cancelRun,
     clearMessages,
   } = useChatSession({
@@ -163,6 +195,13 @@ function App() {
     onConversationCreated,
     onErrorClear: onChatErrorClear,
     onRequestError: reportPageError,
+    selectedModel: selectedModel ? { providerId: selectedModel.provider_id, model: selectedModel.model_name } : null,
+    disclosureModel: disclosureModel ? {
+      providerId: disclosureModel.provider_id,
+      providerName: disclosureModel.provider_name,
+      baseUrl: disclosureModel.base_url,
+      remote: !isLocalInferenceEndpoint(disclosureModel.base_url),
+    } : null,
   });
   const deleteConversation = useCallback(async (item: Item) => {
     const confirmed = await window.zhiyuDialogs.confirm(
@@ -196,6 +235,8 @@ function App() {
       const all = conversationsRef.current.length ? conversationsRef.current : await request<Item[]>("/api/conversations");
       const stored = all.find((item) => item.id === id);
       if (stored) setCharacterId(stored.character_id || null);
+      modelChoiceDirty.current = false;
+      setSelectedModelKey(modelKeyForConversation(stored));
       setConversationId(id);
       setConversationTitle(title || "会话");
       setPage("chat");
@@ -215,13 +256,15 @@ function App() {
           })),
         );
     },
-    [cancelRun, closeMobileMenu],
+    [cancelRun, closeMobileMenu, modelKeyForConversation],
   );
   const startNewChat = useCallback(async () => {
     closeMobileMenu();
     await cancelRun();
     conversationLoadRef.current += 1;
     setConversationId(null);
+    modelChoiceDirty.current = false;
+    setSelectedModelKey("");
     setConversationTitle("新的对话");
     clearMessages();
     setActivity("");
@@ -272,7 +315,9 @@ function App() {
       if (target === "plugins")
         setPluginTab(raw === "skills" || params.get("tab") === "skills" ? "skills" : "mcp");
       setPage(nav.some((item) => item.id === target) ? target : "overview");
+      modelChoiceDirty.current = false;
       setConversationId(id);
+      setSelectedModelKey(modelKeyForConversation(conversationsRef.current.find((item) => item.id === id)));
       setCharacterId(params.get("agent"));
       if (id)
         void (async () => {
@@ -302,7 +347,16 @@ function App() {
     };
     addEventListener("popstate", onPop);
     return () => removeEventListener("popstate", onPop);
-  }, [refreshOverview, refreshConversations, cancelRun, clearMessages, closeMobileMenu]);
+  }, [refreshOverview, refreshConversations, refreshAgents, cancelRun, clearMessages, closeMobileMenu, modelKeyForConversation]);
+  useEffect(() => {
+    if (page === "chat")
+      void loadChatModels().catch((error) => setPageError(errorText(error)));
+  }, [page, loadChatModels]);
+  useEffect(() => {
+    if (!conversationId || modelChoiceDirty.current) return;
+    const conversation = conversations.find((item) => item.id === conversationId);
+    if (conversation) setSelectedModelKey(modelKeyForConversation(conversation));
+  }, [conversationId, conversations, modelKeyForConversation]);
   useEffect(() => {
     const id = new URLSearchParams(location.search).get("conversation");
     if (id)
@@ -497,6 +551,14 @@ function App() {
                 ? `${overview.model.provider} · ${overview.model.model}`
                 : "默认模型未配置"
             }
+            models={chatModels}
+            selectedModelKey={selectedModelKey}
+            onModelChange={(id) => {
+              modelChoiceDirty.current = true;
+              setSelectedModelKey(id);
+            }}
+            retryLast={retryLast}
+            openingMessage={currentAgent?.opening_message}
             requestError={pageError}
             messages={messages}
             activity={activity}
@@ -523,6 +585,10 @@ function App() {
                               ? "事件、投递与故障"
                               : page === "memory"
                                 ? "每日观察与记忆沉淀"
+                                : page === "reminders"
+                                  ? "本机时区 · 一次性提醒"
+                                : page === "data"
+                                  ? "数据库、记忆与角色头像"
                                 : "身份、人格与共同记忆"}
                 </small>
                 <h1>{titles[page]}</h1>
@@ -565,6 +631,10 @@ function App() {
             </header>
             {page === "memory" ? (
               <MemoryPage reloadKey={pageRevision} />
+            ) : page === "reminders" ? (
+              <RemindersPage />
+            ) : page === "data" ? (
+              <DataPage />
             ) : (
               <>
                 {pageError ? (

@@ -27,6 +27,7 @@ class Conversation(Base):
     )
     external_conversation_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     external_user_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    provider_id: Mapped[str | None] = mapped_column(ForeignKey("providers.id", ondelete="SET NULL"), nullable=True)
     model_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     identity_id: Mapped[str | None] = mapped_column(ForeignKey("identities.id"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
@@ -86,7 +87,7 @@ class Provider(Base):
 
     @property
     def configured(self) -> bool:
-        return self.api_key_ref is not None
+        return self.api_key_ref is not None or bool(self.base_url)
 
 
 class ModelConfig(Base):
@@ -117,6 +118,10 @@ class Character(Base):
     background: Mapped[str | None] = mapped_column(Text, nullable=True)
     speaking_style: Mapped[str | None] = mapped_column(Text, nullable=True)
     system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    opening_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    world_setting: Mapped[str | None] = mapped_column(Text, nullable=True)
+    initial_scene: Mapped[str | None] = mapped_column(Text, nullable=True)
+    behavior_preferences: Mapped[str | None] = mapped_column(Text, nullable=True)
     default_model_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
@@ -349,6 +354,29 @@ class AppSetting(Base):
 
     key: Mapped[str] = mapped_column(String(100), primary_key=True)
     value_json: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class ScheduledTask(Base):
+    __tablename__ = "scheduled_tasks"
+    __table_args__ = (Index("ix_scheduled_tasks_due", "status", "enabled", "next_attempt_at"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    content: Mapped[str] = mapped_column(Text)
+    due_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    timezone: Mapped[str] = mapped_column(String(100))
+    channel: Mapped[str] = mapped_column(String(16), default="local")
+    channel_config_id: Mapped[str | None] = mapped_column(
+        ForeignKey("channel_configs.id", ondelete="SET NULL"), nullable=True
+    )
+    target_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 

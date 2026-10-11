@@ -71,6 +71,7 @@ export function MemoryPage({ reloadKey }: { reloadKey: number }) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [autoMemoryEnabled, setAutoMemoryEnabled] = useState(true);
 
   const load = useCallback(async (isAlive: () => boolean = () => true) => {
     if (isAlive()) {
@@ -78,13 +79,15 @@ export function MemoryPage({ reloadKey }: { reloadKey: number }) {
       setLoadError("");
     }
     try {
-      const [items, recentRuns] = await Promise.all([
+      const [items, recentRuns, settings] = await Promise.all([
         request<Item[]>("/api/memories?tier=episodic"),
         request<Item[]>(`/api/memory-consolidation-runs?limit=${RUN_PAGE_SIZE}`),
+        request<Item>("/api/memory-settings"),
       ]);
       if (isAlive()) {
         setMemories(items);
         setRuns(recentRuns);
+        setAutoMemoryEnabled(settings.auto_enabled !== false);
         setHasMoreRuns(recentRuns.length === RUN_PAGE_SIZE);
       }
     } catch (error) {
@@ -112,6 +115,19 @@ export function MemoryPage({ reloadKey }: { reloadKey: number }) {
       void window.zhiyuDialogs.alert(errorText(error), "读取日记失败");
     } finally {
       setLoadingMore(false);
+    }
+  }
+
+  async function toggleAutoMemory() {
+    try {
+      const updated = await request<Item>("/api/memory-settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", "X-Zhiyu-Request": "1" },
+        body: JSON.stringify({ enabled: !autoMemoryEnabled }),
+      });
+      setAutoMemoryEnabled(updated.auto_enabled);
+    } catch (error) {
+      void window.zhiyuDialogs.alert(errorText(error), "自动记忆设置失败");
     }
   }
 
@@ -156,6 +172,10 @@ export function MemoryPage({ reloadKey }: { reloadKey: number }) {
               onChange={(event) => setQuery(event.target.value)}
             />
             <span className="badge">{visibleMemories.length} 条观察</span>
+            <label className="memory-auto-toggle">
+              <input type="checkbox" checked={autoMemoryEnabled} onChange={() => void toggleAutoMemory()} />
+              自动记忆
+            </label>
           </div>
           {diary.length ? diary.map(([day, entries]) => (
             <section className="panel diary-day" key={day || "undated"}>

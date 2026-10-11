@@ -53,7 +53,7 @@ def test_upgrade_preserves_legacy_data(tmp_path):
 
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT title FROM conversations WHERE id='c1'")) == "保留我"
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0023_multi_agent"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0026_m2_scheduled_tasks"
         assert connection.scalar(text(
             "SELECT memory_id FROM memory_fts WHERE memory_fts MATCH '\"保留这\"'"
         )) == "m1"
@@ -62,9 +62,9 @@ def test_upgrade_preserves_legacy_data(tmp_path):
         ) is None
         assert connection.scalar(text("SELECT channel FROM conversations WHERE id='c1'")) == "local"
         memory = connection.execute(text(
-            "SELECT content, status, origin FROM memories WHERE id='m1'"
+            "SELECT content, status, origin, shared FROM memories WHERE id='m1'"
         )).one()
-        assert tuple(memory) == ("保留这条记忆", "active", "legacy")
+        assert tuple(memory) == ("保留这条记忆", "active", "legacy", 1)
         connection.execute(text("UPDATE memories SET content='新的长期记忆' WHERE id='m1'"))
         assert connection.scalar(text(
             "SELECT memory_id FROM memory_fts WHERE memory_fts MATCH '\"新的长\"'"
@@ -81,6 +81,7 @@ def test_upgrade_preserves_legacy_data(tmp_path):
         "channel_group_policies",
         "channel_media_assets",
         "conversation_summaries",
+        "scheduled_tasks",
     } <= tables
     assert "tool_allowlist_json" in {
         column["name"] for column in inspect(engine).get_columns("mcp_server_configs")
@@ -113,6 +114,10 @@ def test_upgrade_preserves_legacy_data(tmp_path):
     }
     assert {"last_message_id", "last_message_created_at"} <= {
         column["name"] for column in inspect(engine).get_columns("conversation_summaries")
+    }
+    assert "provider_id" in {column["name"] for column in inspect(engine).get_columns("conversations")}
+    assert {"opening_message", "world_setting", "initial_scene", "behavior_preferences"} <= {
+        column["name"] for column in inspect(engine).get_columns("characters")
     }
 
 

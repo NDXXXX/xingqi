@@ -13,6 +13,11 @@ export function ChatPage({
   onSubmit,
   onDraftChange,
   onCancel,
+  models,
+  selectedModelKey,
+  onModelChange,
+  retryLast,
+  openingMessage,
 }: {
   conversationTitle: string;
   agentName: string;
@@ -25,6 +30,11 @@ export function ChatPage({
   onSubmit: (event: FormEvent) => void;
   onDraftChange: (value: string) => void;
   onCancel: () => void;
+  models: Item[];
+  selectedModelKey: string;
+  onModelChange: (id: string) => void;
+  retryLast: () => void;
+  openingMessage?: string | null;
 }) {
   return (
     <>
@@ -33,7 +43,17 @@ export function ChatPage({
           <small>当前会话</small>
           <h1>{conversationTitle}</h1>
         </div>
-        <div className="badge">{modelLabel}</div>
+        <div className="chat-model-control">
+          <label className="sr-only" htmlFor="chat-model">当前会话模型</label>
+          <select id="chat-model" value={selectedModelKey} onChange={(event) => onModelChange(event.target.value)}>
+            <option value="">{modelLabel}</option>
+            {models.map((model) => (
+              <option key={model.id} value={model.id}>
+                {model.provider_name} · {model.display_name || model.model_name}
+              </option>
+            ))}
+          </select>
+        </div>
       </header>
       {requestError && !messages.some((item) => item.error) && (
         <div className="error-text" role="alert">
@@ -54,6 +74,9 @@ export function ChatPage({
                   <>
                     <br />
                     <small>运行失败：{item.error}</small>
+                    {index === messages.length - 1 && (
+                      <button className="retry-message" type="button" onClick={retryLast}>重试</button>
+                    )}
                   </>
                 )}
                 {item.cancelled && <small>已停止生成</small>}
@@ -67,7 +90,7 @@ export function ChatPage({
           <div className="empty-state">
             <span>{agentName.slice(0, 1)}</span>
             <h2>有什么想一起处理的？</h2>
-            <p>与当前智能体对话，工具和长期记忆按它的权限使用。</p>
+            <p>{openingMessage || "与当前智能体对话，工具和长期记忆按它的权限使用。"}</p>
           </div>
         )}
       </div>

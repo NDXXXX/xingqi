@@ -601,8 +601,8 @@ src/zhiyu/
 
 ## 16. 与现有文档的关系
 
-- [QQ接入设计方案](QQ接入设计方案.md)继续描述 QQ官方 Bot和 OneBot双驱动的渠道产品设计；本方案提供其共用的平台基础。
-- [AstrBot QQ接入对照](astrbot-qq-reference.md)保留为 OneBot源码核实记录。
+- QQ 渠道当前以 OneBot 为准；官方 Bot 不在本文实施范围内。
+- [AstrBot QQ接入对照](../../参考资料/astrbot-qq-reference.md)保留为 OneBot源码核实记录。
 - [运行可靠性优化设计方案](运行可靠性优化设计方案.md)已经完成的模型能力、记忆任务重试和 QQ监听鉴权继续有效。
 - [CLI优先开发设计方案](CLI优先开发设计方案.md)仍然有效；Phase 4 已按其边界重新引入薄 Web API 层。
 

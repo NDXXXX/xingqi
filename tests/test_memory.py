@@ -49,7 +49,7 @@ def test_parse_candidates_invalid():
     assert parse_candidates('[{"type": "unknown", "content": "x"}]') == []
 
 
-def test_memories_are_isolated_by_identity():
+def test_user_facts_are_shared_but_channel_memories_stay_isolated():
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
     from sqlalchemy.pool import StaticPool
@@ -69,5 +69,7 @@ def test_memories_are_isolated_by_identity():
     repo.create(db, type="fact", content="共享信息", identity_id=local.id, shared=True)
 
     assert {memory.content for memory in repo.list(db, local.id)} == {"桌面秘密", "共享信息"}
-    assert {memory.content for memory in repo.list(db, qq.id)} == {"QQ 秘密", "共享信息"}
+    assert {memory.content for memory in repo.list(db, qq.id)} == {
+        "桌面秘密", "QQ 秘密", "共享信息"
+    }
     db.close()

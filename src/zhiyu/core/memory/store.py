@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import shutil
 import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -166,6 +167,39 @@ class MemoryStore:
         if vault.parent != identities:
             raise ValueError("无效的记忆身份")
         return vault
+
+    def quarantine_identity(self, identity_id: str) -> Path | None:
+        source = self.vault_dir(identity_id)
+        if not source.exists():
+            return None
+        trash = self.dir / ".deleting"
+        trash.mkdir(parents=True, exist_ok=True)
+        destination = trash / identity_id
+        if destination.exists():
+            raise ValueError("角色记忆目录已有待恢复的删除操作")
+        os.replace(source, destination)
+        return destination
+
+    def restore_quarantined_identity(self, identity_id: str) -> None:
+        destination = self.dir / ".deleting" / identity_id
+        if not destination.exists():
+            return
+        source = self.vault_dir(identity_id)
+        if source.exists():
+            raise ValueError("无法恢复角色记忆目录：目标目录已存在")
+        source.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(destination, source)
+
+    def remove_quarantined_identity(self, identity_id: str) -> None:
+        destination = self.dir / ".deleting" / identity_id
+        if destination.exists():
+            shutil.rmtree(destination)
+
+    def quarantined_identities(self) -> list[str]:
+        directory = self.dir / ".deleting"
+        if not directory.is_dir():
+            return []
+        return [path.name for path in directory.iterdir() if path.is_dir() and _IDENTITY_RE.fullmatch(path.name)]
 
     def user_path_for(self, identity_id: str) -> Path:
         return self.vault_dir(identity_id) / USER_FILE
