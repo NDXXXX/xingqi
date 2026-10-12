@@ -5,7 +5,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from zhiyu.application.scheduled_tasks import ScheduledTaskService
+from zhiyu.scheduled_tasks.service import ScheduledTaskService
 
 
 class ScheduledTaskBody(BaseModel):

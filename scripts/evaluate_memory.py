@@ -7,8 +7,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from zhiyu.core.memory.extractor import extract_observations
-from zhiyu.core.providers.router import provider_router
+from zhiyu.memory.extractor import extract_observations
+from zhiyu.providers.router import provider_router
 from zhiyu.infrastructure.database.db import SessionLocal
 from zhiyu.infrastructure.database.repositories.provider_repository import ProviderRepository
 

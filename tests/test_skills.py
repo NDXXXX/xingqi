@@ -1,8 +1,8 @@
 """Skills 加载与匹配测试。"""
 
-from zhiyu.integrations.skills.loader import load_skills, parse_skill
-from zhiyu.integrations.skills.registry import SkillRegistry
-from zhiyu.core.tools.skills import ReadSkillTool
+from zhiyu.skills.loader import load_skills, parse_skill
+from zhiyu.skills.registry import SkillRegistry
+from zhiyu.skills.tool import ReadSkillTool
 
 
 def _write_skill(root, name: str, md: str):
@@ -93,7 +93,7 @@ def test_parse_skill_rejects_duplicate_yaml_keys(tmp_path):
 
 
 def test_validate_package_rejects_symlinks(tmp_path):
-    from zhiyu.integrations.skills.loader import validate_package
+    from zhiyu.skills.loader import validate_package
 
     skill = _write_skill(tmp_path, "safe", "---\nname: safe\ndescription: safe\n---\nbody")
     (skill / "escape").symlink_to(tmp_path / "outside")

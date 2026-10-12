@@ -4,9 +4,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from zhiyu.core.memory.indexer import rebuild_index
-from zhiyu.core.memory.store import MemoryStore
-from zhiyu.core.tools.memory import MemoryGetTool, MemorySearchTool
+from zhiyu.memory.indexer import rebuild_index
+from zhiyu.memory.store import MemoryStore
+from zhiyu.memory.tools import MemoryGetTool, MemorySearchTool
 from zhiyu.infrastructure.database import models  # noqa: F401
 from zhiyu.infrastructure.database.db import Base
 from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository

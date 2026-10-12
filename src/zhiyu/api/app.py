@@ -18,12 +18,12 @@ from zhiyu.api.routes.memories import build_memories_router
 from zhiyu.api.routes.providers import build_provider_router
 from zhiyu.api.routes.scheduled_tasks import build_scheduled_tasks_router
 from zhiyu.api.routes.skills import build_skills_router
-from zhiyu.application.memories import MemoryService
+from zhiyu.memory.service import MemoryService
 from zhiyu.application.assistant_profile import AssistantProfileService
-from zhiyu.application.providers import ProviderService
+from zhiyu.providers.service import ProviderService
 from zhiyu.application.runtime import RuntimeHost
-from zhiyu.application.skills import SkillService
-from zhiyu.application.scheduled_tasks import ScheduledTaskService
+from zhiyu.skills.service import SkillService
+from zhiyu.scheduled_tasks.service import ScheduledTaskService
 from zhiyu.application.data_archive import DataArchiveService
 from zhiyu.infrastructure.config.settings import settings
 

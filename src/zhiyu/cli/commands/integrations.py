@@ -5,9 +5,9 @@ import getpass
 import json
 import sys
 
-from zhiyu.application.mcp import McpService
-from zhiyu.application.providers import ProviderService
-from zhiyu.application.skills import SkillService
+from zhiyu.mcp.service import McpService
+from zhiyu.providers.service import ProviderService
+from zhiyu.skills.service import SkillService
 
 def _embedding(args) -> None:
     service = ProviderService()

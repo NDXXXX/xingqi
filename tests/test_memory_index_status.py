@@ -5,8 +5,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-import zhiyu.core.memory.indexer as indexer
-from zhiyu.core.memory.store import MemoryStore
+import zhiyu.memory.indexer as indexer
+from zhiyu.memory.store import MemoryStore
 from zhiyu.infrastructure.database.db import Base
 from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository
 

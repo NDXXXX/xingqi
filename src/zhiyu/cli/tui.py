@@ -5,11 +5,11 @@ from textual.containers import VerticalScroll
 from textual.widgets import Input, Markdown, Static
 from textual import on, work
 
-from zhiyu.application.characters import CharacterService
-from zhiyu.application.chat import ChatRequest, ChatService
-from zhiyu.application.conversations import ConversationService
-from zhiyu.application.memories import MemoryService
-from zhiyu.core.recall import format_welcome
+from zhiyu.characters.service import CharacterService
+from zhiyu.chat.service import ChatRequest, ChatService
+from zhiyu.sessions.service import ConversationService
+from zhiyu.memory.service import MemoryService
+from zhiyu.sessions.recall import format_welcome
 
 
 class ChatApp(App):
@@ -144,7 +144,7 @@ class ChatApp(App):
             else:
                 await self._add(Static(self._model or "使用默认模型"))
         elif text == "/tools":
-            from zhiyu.core.tools.registry import default_registry
+            from zhiyu.agents.tools.registry import default_registry
 
             lines = [f"{t.name}: {t.description}" for t in default_registry().all()]
             await self._add(Static("\n".join(lines)))

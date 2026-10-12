@@ -1,6 +1,6 @@
 """Character 系统提示词组装测试。"""
 
-from zhiyu.core.characters.prompts import build_system_prompt
+from zhiyu.characters.prompts import build_system_prompt
 from zhiyu.infrastructure.database.models import Character
 
 

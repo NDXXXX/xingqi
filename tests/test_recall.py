@@ -4,8 +4,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from zhiyu.core.agent.context import with_agent_context
-from zhiyu.core.recall import (
+from zhiyu.agents.context import with_agent_context
+from zhiyu.sessions.recall import (
     build_recall,
     format_welcome,
     last_local_conversation,

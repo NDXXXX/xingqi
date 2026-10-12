@@ -10,7 +10,7 @@ from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from zhiyu.core.memory.retriever import derive_trigger_text, hybrid_rank
+from zhiyu.memory.retriever import derive_trigger_text, hybrid_rank
 from zhiyu.infrastructure.database import models  # noqa: F401
 from zhiyu.infrastructure.database.db import Base
 from zhiyu.infrastructure.database.models import Memory

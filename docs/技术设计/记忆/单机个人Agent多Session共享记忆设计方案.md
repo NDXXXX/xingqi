@@ -30,11 +30,11 @@ Session 回答“这段对话的上下文是什么”；记忆回答“Agent 从
 
 主要代码位置：
 
-- [chat.py](../../../src/zhiyu/application/chat.py)：创建会话，并为本机/外部渠道分配 identity。
+- [chat.py](../../../src/zhiyu/chat/service.py)：创建会话，并为本机/外部渠道分配 identity。
 - [identity_repository.py](../../../src/zhiyu/infrastructure/database/repositories/identity_repository.py)：本机与外部渠道身份分别创建。
-- [context.py](../../../src/zhiyu/core/agent/context.py)：按 `Conversation.identity_id` 加载并注入记忆。
-- [memory_jobs.py](../../../src/zhiyu/application/memory_jobs.py)：后台提取任务沿用该 identity 写入记忆。
-- [store.py](../../../src/zhiyu/core/memory/store.py)：记忆文件按 identity 分目录。
+- [context.py](../../../src/zhiyu/agents/context.py)：按 `Conversation.identity_id` 加载并注入记忆。
+- [memory_jobs.py](../../../src/zhiyu/memory/jobs.py)：后台提取任务沿用该 identity 写入记忆。
+- [store.py](../../../src/zhiyu/memory/store.py)：记忆文件按 identity 分目录。
 
 因此，问题不在“缺少更复杂的主人实体”，而是**Session 身份与记忆归属耦合了**。
 

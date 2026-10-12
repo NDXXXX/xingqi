@@ -3,9 +3,9 @@
 import asyncio
 import json
 
-from zhiyu.application.consolidation_jobs import ConsolidationProcessor
-from zhiyu.application.memories import MemoryService
-from zhiyu.application.memory_jobs import MemoryJobProcessor
+from zhiyu.memory.consolidation_jobs import ConsolidationProcessor
+from zhiyu.memory.service import MemoryService
+from zhiyu.memory.jobs import MemoryJobProcessor
 
 def _print_memories(items) -> None:
     if not items:

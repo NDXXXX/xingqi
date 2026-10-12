@@ -14,8 +14,8 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from zhiyu.application.inbound import ChannelReliabilityService
-from zhiyu.application.channels import ChannelService
+from zhiyu.channels.reliability import ChannelReliabilityService
+from zhiyu.channels.service import ChannelService
 from zhiyu.channels.manager import ChannelManager
 from zhiyu.channels.messages import (
     AudioPart,

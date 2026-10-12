@@ -3,8 +3,8 @@
 from dataclasses import asdict
 
 from fastapi import APIRouter, HTTPException, Depends
-from zhiyu.application.characters import CharacterService
-from zhiyu.application.mcp import McpService
+from zhiyu.characters.service import CharacterService
+from zhiyu.mcp.service import McpService
 
 from zhiyu.api.schemas.integrations import (
     McpAllowlistBody,

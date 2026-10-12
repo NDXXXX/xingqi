@@ -6,8 +6,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from zhiyu.application.scheduled_task_jobs import ScheduledTaskProcessor
-from zhiyu.application.scheduled_tasks import ScheduledTaskService
+from zhiyu.scheduled_tasks.jobs import ScheduledTaskProcessor
+from zhiyu.scheduled_tasks.service import ScheduledTaskService
 from zhiyu.channels.messages import DeliveryReceipt
 from zhiyu.infrastructure.database.db import Base
 from zhiyu.infrastructure.database.models import ScheduledTask, utcnow

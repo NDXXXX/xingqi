@@ -7,11 +7,11 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from zhiyu.api.schemas.agent import CharacterBody, ChatBody
-from zhiyu.application.characters import CharacterService
-from zhiyu.application.chat import ChatRequest
-from zhiyu.application.conversations import ConversationService
+from zhiyu.characters.service import CharacterService
+from zhiyu.chat.service import ChatRequest
+from zhiyu.sessions.service import ConversationService
 from zhiyu.application.runtime import RuntimeHost
-from zhiyu.core.memory.store import MemoryStore
+from zhiyu.memory.store import MemoryStore
 
 
 def build_agent_router(runtime: RuntimeHost) -> APIRouter:

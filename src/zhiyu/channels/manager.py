@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from collections.abc import Callable
 
-from zhiyu.application.inbound import ChannelReliabilityService
+from zhiyu.channels.reliability import ChannelReliabilityService
 from zhiyu.infrastructure.database.db import SessionLocal
 
 from .base import ChannelAdapter

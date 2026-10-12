@@ -14,9 +14,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from zhiyu.core.memory.indexer import rebuild_index, sync_changed_index
-from zhiyu.core.memory.retriever import hybrid_rank
-from zhiyu.core.memory.store import MemoryStore
+from zhiyu.memory.indexer import rebuild_index, sync_changed_index
+from zhiyu.memory.retriever import hybrid_rank
+from zhiyu.memory.store import MemoryStore
 from zhiyu.infrastructure.database.db import Base
 from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository
 from zhiyu.infrastructure.database.repositories.memory_repository import MemoryRepository

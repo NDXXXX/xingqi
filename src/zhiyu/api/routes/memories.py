@@ -4,10 +4,10 @@ from dataclasses import asdict
 
 from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
-from zhiyu.application.characters import CharacterService
+from zhiyu.characters.service import CharacterService
 
 from zhiyu.api.schemas.agent import MemoryEditBody
-from zhiyu.application.memories import MemoryService
+from zhiyu.memory.service import MemoryService
 
 
 class AutoMemoryBody(BaseModel):

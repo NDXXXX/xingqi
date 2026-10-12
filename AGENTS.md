@@ -51,12 +51,21 @@
 | --- | --- |
 | `src/zhiyu/cli/` | CLI、TUI、终端交互 |
 | `src/zhiyu/api/` | FastAPI 路由和 HTTP 适配 |
-| `src/zhiyu/application/` | 应用用例和业务流程编排 |
-| `src/zhiyu/core/` | Agent、Provider、Tools、Memory 等核心能力 |
-| `src/zhiyu/channels/` | 通用渠道消息和适配 |
+| `src/zhiyu/agents/` | Agent 上下文、执行、状态和通用工具 |
+| `src/zhiyu/chat/` | 对话用例及 Agent 调用编排 |
+| `src/zhiyu/sessions/` | 会话历史、运行控制和续接召回 |
+| `src/zhiyu/memory/` | 记忆服务、存储、检索、索引和专属工具 |
+| `src/zhiyu/characters/` | 角色服务和提示词 |
+| `src/zhiyu/providers/` | 模型协议、Embedding、路由和管理；`catalog.py` 保存纯默认元数据 |
+| `src/zhiyu/channels/` | 通用渠道、渠道服务、可靠性流程和适配 |
 | `src/zhiyu/channels/qq/` | QQ / NapCat / OneBot |
+| `src/zhiyu/mcp/` | MCP 连接、运行时管理和服务 |
+| `src/zhiyu/skills/` | Skill 加载、注册、服务和 Agent 工具 |
+| `src/zhiyu/builtin_skills/` | 随应用打包的内置 Skill 定义 |
+| `src/zhiyu/scheduled_tasks/` | 定时任务服务和处理器 |
+| `src/zhiyu/application/` | 跨域用例、运行时组装及既有 MemoryService 兼容入口 |
 | `src/zhiyu/infrastructure/` | 配置、数据库、Repository、Migration |
-| `src/zhiyu/integrations/` | MCP、Skills |
+| `src/zhiyu/core/memory/indexer.py` | 既有记忆索引器兼容导入入口；不新增 Core 实现 |
 | `web/src/` | React / TypeScript 前端源码 |
 | `src/zhiyu/web/static/react/` | Vite 构建产物，不手改 |
 | `tests/` | Python 测试 |
@@ -66,12 +75,12 @@
 
 新增或修改代码的默认调用方向：
 
-`CLI / API / Channels → Application → Core / Infrastructure / Integrations`
+`CLI / API / Channels → 单一功能包；跨功能流程 → Application → 功能包 / Infrastructure`
 
-末端三个目录表示 Application 可按职责调用的模块，不表示它们之间有固定的依赖顺序。`application/runtime.py` 负责组装渠道运行时，可引用 Channels；这不是让业务用例反向调用入口的先例。
+`application/runtime.py` 负责组装渠道运行时，可引用 Channels；这不是让业务用例反向调用入口的先例。功能包间只保留明确依赖并避免循环；Infrastructure 不依赖服务或运行时实现。`ProviderRepository` 只读取 `providers/catalog.py`，`MemoryRepository` 只读取记忆共享范围纯规则。
 
-- CLI、Web、QQ 共享的业务行为放到 Application 或 Core。
-- Core 不反向依赖 API、Web、CLI 或具体 QQ 实现。
+- CLI、Web、QQ 共享的单一功能行为放到对应功能包；跨域流程放到 Application。
+- `core/` 仅保留兼容索引器导入入口，不再承载业务实现。
 - 不通过一个入口调用另一个入口来复用业务逻辑。
 - 避免循环依赖。
 - Provider 特有逻辑留在 Provider 层。

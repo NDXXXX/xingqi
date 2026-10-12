@@ -2,9 +2,9 @@
 
 import pytest
 
-from zhiyu.core.tools.calculator import CalculatorTool
-from zhiyu.core.tools.datetime import DateTimeTool
-from zhiyu.core.tools.registry import default_registry
+from zhiyu.agents.tools.calculator import CalculatorTool
+from zhiyu.agents.tools.datetime import DateTimeTool
+from zhiyu.agents.tools.registry import default_registry
 
 
 async def test_calculator_basic():

@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from ..models import Identity, Memory, utcnow
 from .identity_repository import LOCAL_IDENTITY_ID
-from zhiyu.core.memory.scopes import is_shared_user_memory
+from zhiyu.memory.scopes import is_shared_user_memory
 
 
 class MemoryRepository:

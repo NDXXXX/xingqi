@@ -3,8 +3,8 @@
 from zhiyu.infrastructure.database.models import Memory
 from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository
 from zhiyu.infrastructure.database.repositories.memory_repository import MemoryRepository
-from zhiyu.core.memory.extractor import parse_candidates
-from zhiyu.core.memory.retriever import retrieve
+from zhiyu.memory.extractor import parse_candidates
+from zhiyu.memory.retriever import retrieve
 
 
 def _memory(content: str, importance: float = 0.5, type: str = "fact") -> Memory:

@@ -430,14 +430,14 @@ Skill 匹配与按需读取保持现有路径：system prompt 只列可用名称
 
 ## 14. 预计代码落点
 
-- `src/zhiyu/integrations/mcp/connection.py`：多传输连接、Tools/Resources/Prompts 接口。
-- `src/zhiyu/integrations/mcp/manager.py`：Server supervisor、运行状态、重连和能力刷新。
-- `src/zhiyu/application/mcp.py`：配置、Secret 生命周期、test/reconnect、CLI 展示模型。
+- `src/zhiyu/mcp/connection.py`：多传输连接、Tools/Resources/Prompts 接口。
+- `src/zhiyu/mcp/manager.py`：Server supervisor、运行状态、重连和能力刷新。
+- `src/zhiyu/mcp/service.py`：配置、Secret 生命周期、test/reconnect、CLI 展示模型。
 - `src/zhiyu/infrastructure/database/models.py` 与新迁移：传输配置、状态、env/secret 引用。
 - `src/zhiyu/infrastructure/database/repositories/integration_repository.py`：持久化配置和状态。
-- `src/zhiyu/integrations/skills/loader.py`：严格 manifest 解析、体积/路径校验。
-- `src/zhiyu/integrations/skills/registry.py`：安装元数据、版本/hash、原子 reload。
-- `src/zhiyu/application/skills.py`：Skill 生命周期用例和来源管理。
+- `src/zhiyu/skills/loader.py`：严格 manifest 解析、体积/路径校验。
+- `src/zhiyu/skills/registry.py`：安装元数据、版本/hash、原子 reload。
+- `src/zhiyu/skills/service.py`：Skill 生命周期用例和来源管理。
 - `src/zhiyu/cli/main.py`：`mcp` / `skills` 子命令。
 - `src/zhiyu/api/app.py`：MCP 与 Skills 只读状态接口。
 - WebUI 已迁至 `web/src/app.tsx`；MCP 与 Skills 页面在站内管理生命周期和授权操作。此处只约束 MCP/Skills 后端边界，不再依赖旧 `static/app.js`。

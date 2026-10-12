@@ -9,11 +9,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from zhiyu.application.consolidation_jobs import ConsolidationProcessor
-from zhiyu.core.memory.consolidation import apply_consolidation, parse_consolidation
-from zhiyu.core.memory.manager import MemoryManager
-from zhiyu.core.memory.store import MemoryStore
-from zhiyu.core.providers.base import AIProvider, LLMResponse
+from zhiyu.memory.consolidation_jobs import ConsolidationProcessor
+from zhiyu.memory.consolidation import apply_consolidation, parse_consolidation
+from zhiyu.memory.manager import MemoryManager
+from zhiyu.memory.store import MemoryStore
+from zhiyu.providers.base import AIProvider, LLMResponse
 from zhiyu.infrastructure.database import models  # noqa: F401
 from zhiyu.infrastructure.database.db import Base
 from zhiyu.infrastructure.database.repositories.conversation_repository import ConversationRepository
@@ -21,7 +21,7 @@ from zhiyu.infrastructure.database.repositories.identity_repository import Ident
 from zhiyu.infrastructure.database.repositories.memory_repository import MemoryRepository
 from zhiyu.infrastructure.database.repositories.provider_repository import ProviderRepository
 from zhiyu.infrastructure.database.models import MemoryRecallEvent, utcnow
-from zhiyu.core.memory.freshness import needs_confirmation
+from zhiyu.memory.freshness import needs_confirmation
 
 
 def _database():
@@ -369,7 +369,7 @@ def test_run_sweep_promotes_end_to_end(tmp_path, monkeypatch):
             return FakeClient()
 
     monkeypatch.setattr(
-        "zhiyu.application.consolidation_jobs.provider_router", FakeRouter()
+        "zhiyu.memory.consolidation_jobs.provider_router", FakeRouter()
     )
 
     result = asyncio.run(

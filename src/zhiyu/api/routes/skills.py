@@ -1,12 +1,12 @@
 """Skill lifecycle endpoints."""
 
 from fastapi import APIRouter, HTTPException, Depends
-from zhiyu.application.characters import CharacterService
+from zhiyu.characters.service import CharacterService
 
 from zhiyu.api.schemas.integrations import McpEnabledBody, SkillInstallBody, SkillUpdateBody
 from zhiyu.application.runtime import RuntimeHost
-from zhiyu.application.skills import SkillService
-from zhiyu.core.tools.registry import default_registry
+from zhiyu.skills.service import SkillService
+from zhiyu.agents.tools.registry import default_registry
 
 
 def build_skills_router(runtime: RuntimeHost, skills: SkillService) -> APIRouter:

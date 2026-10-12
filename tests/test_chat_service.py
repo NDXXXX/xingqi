@@ -10,12 +10,12 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from zhiyu.application.chat import ChatRequest, ChatService
+from zhiyu.chat.service import ChatRequest, ChatService
 from zhiyu.channels.messages import ImagePart, TextPart
-from zhiyu.application.memories import MemoryService
-from zhiyu.core.memory.manager import MemoryManager
-from zhiyu.core.memory.store import MemoryStore
-from zhiyu.core.providers.base import AIProvider, LLMResponse
+from zhiyu.memory.service import MemoryService
+from zhiyu.memory.manager import MemoryManager
+from zhiyu.memory.store import MemoryStore
+from zhiyu.providers.base import AIProvider, LLMResponse
 from zhiyu.infrastructure.database import models  # noqa: F401
 from zhiyu.infrastructure.database.db import Base
 from zhiyu.infrastructure.database.repositories.agent_run_repository import AgentRunRepository

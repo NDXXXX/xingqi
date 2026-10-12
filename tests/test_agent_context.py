@@ -4,10 +4,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-import zhiyu.core.agent.context as context_module
+import zhiyu.agents.context as context_module
 from datetime import timedelta
 from types import SimpleNamespace
-from zhiyu.core.agent.context import (
+from zhiyu.agents.context import (
     build_tool_registry,
     compact_messages,
     trim_messages,
@@ -19,10 +19,10 @@ from zhiyu.infrastructure.database.db import Base
 from zhiyu.infrastructure.database.repositories.character_repository import CharacterRepository
 from zhiyu.infrastructure.database.repositories.conversation_repository import ConversationRepository
 from zhiyu.infrastructure.database.repositories.memory_repository import MemoryRepository
-from zhiyu.core.memory.freshness import needs_confirmation
-from zhiyu.core.memory.store import MemoryStore
+from zhiyu.memory.freshness import needs_confirmation
+from zhiyu.memory.store import MemoryStore
 from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository
-from zhiyu.integrations.skills.registry import SkillRegistry
+from zhiyu.skills.registry import SkillRegistry
 
 
 def _session():

@@ -3,13 +3,13 @@
 import json
 import sys
 
-from zhiyu.application.characters import CharacterService
-from zhiyu.application.chat import ChatRequest, ChatService
-from zhiyu.application.conversations import ConversationService
-from zhiyu.application.memories import MemoryService
+from zhiyu.characters.service import CharacterService
+from zhiyu.chat.service import ChatRequest, ChatService
+from zhiyu.sessions.service import ConversationService
+from zhiyu.memory.service import MemoryService
 from zhiyu.cli.commands.memories import _print_memories
-from zhiyu.core.recall import format_welcome
-from zhiyu.core.tools.registry import default_registry
+from zhiyu.sessions.recall import format_welcome
+from zhiyu.agents.tools.registry import default_registry
 
 CYAN = "\033[36m"
 GREEN = "\033[32m"

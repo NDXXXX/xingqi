@@ -4,7 +4,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from zhiyu.application.providers import PROVIDER_FALLBACKS_KEY, ProviderService
+from zhiyu.providers.service import PROVIDER_FALLBACKS_KEY, ProviderService
 from zhiyu.infrastructure.database import models  # noqa: F401
 from zhiyu.infrastructure.database.db import Base
 from zhiyu.infrastructure.database.repositories.setting_repository import SettingRepository

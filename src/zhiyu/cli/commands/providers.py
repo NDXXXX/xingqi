@@ -4,7 +4,7 @@ import asyncio
 from getpass import getpass
 import sys
 
-from zhiyu.application.providers import ProviderService
+from zhiyu.providers.service import ProviderService
 
 
 def handle_provider(args) -> None:

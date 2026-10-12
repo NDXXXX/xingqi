@@ -4,9 +4,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from zhiyu.application.memories import MemoryService
-from zhiyu.core.memory.deep_recall import deep_recall, has_recall_intent, is_forgotten
-from zhiyu.core.memory.store import MemoryStore
+from zhiyu.memory.service import MemoryService
+from zhiyu.memory.deep_recall import deep_recall, has_recall_intent, is_forgotten
+from zhiyu.memory.store import MemoryStore
 from zhiyu.infrastructure.database import models  # noqa: F401
 from zhiyu.infrastructure.database.db import Base
 from zhiyu.infrastructure.database.repositories.conversation_repository import ConversationRepository

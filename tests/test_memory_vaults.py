@@ -10,13 +10,13 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from zhiyu.application.memories import MemoryService
-from zhiyu.core.memory.consolidation import apply_consolidation
-from zhiyu.core.memory.indexer import rebuild_index, sync_changed_index
-from zhiyu.core.memory.manager import MemoryManager, extract_assistant_name
-from zhiyu.core.memory.mutations import FileMutationManager
-from zhiyu.core.memory.store import MemoryStore
-from zhiyu.core.providers.base import AIProvider, LLMResponse
+from zhiyu.memory.service import MemoryService
+from zhiyu.memory.consolidation import apply_consolidation
+from zhiyu.memory.indexer import rebuild_index, sync_changed_index
+from zhiyu.memory.manager import MemoryManager, extract_assistant_name
+from zhiyu.memory.mutations import FileMutationManager
+from zhiyu.memory.store import MemoryStore
+from zhiyu.providers.base import AIProvider, LLMResponse
 from zhiyu.infrastructure.database import models  # noqa: F401
 from zhiyu.infrastructure.database.db import Base
 from zhiyu.infrastructure.database.models import (
@@ -133,7 +133,7 @@ def test_file_lock_timeout_does_not_wait_forever(tmp_path, monkeypatch):
     path = store.core_path_for("local")
     path.parent.mkdir(parents=True)
     lock_path = path.parent / f".{path.name}.lock"
-    monkeypatch.setattr("zhiyu.core.memory.store._LOCK_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr("zhiyu.memory.store._LOCK_TIMEOUT_SECONDS", 0.01)
 
     with FileLock(str(lock_path)):
         with pytest.raises(Timeout):
@@ -149,7 +149,7 @@ def test_atomic_replace_failure_preserves_original_file(tmp_path, monkeypatch):
     def fail_replace(source, destination):
         raise OSError("simulated replace failure")
 
-    monkeypatch.setattr("zhiyu.core.memory.store.os.replace", fail_replace)
+    monkeypatch.setattr("zhiyu.memory.store.os.replace", fail_replace)
     with pytest.raises(OSError, match="simulated replace failure"):
         store.replace_by_id(
             path,

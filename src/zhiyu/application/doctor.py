@@ -10,7 +10,7 @@ from zhiyu.infrastructure.config.keystore import keystore
 from zhiyu.infrastructure.config.settings import settings
 from zhiyu.infrastructure.database.db import SessionLocal
 from zhiyu.infrastructure.database.repositories.provider_repository import ProviderRepository
-from zhiyu.integrations.skills.registry import default_registry
+from zhiyu.skills.registry import default_registry
 
 
 @dataclass(slots=True)

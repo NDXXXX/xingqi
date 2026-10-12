@@ -5,7 +5,7 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from zhiyu.core.providers.router import PROVIDER_SPECS
+from zhiyu.providers.catalog import PROVIDER_CATALOG
 from ..models import ModelConfig, Provider
 
 
@@ -42,9 +42,9 @@ class ProviderRepository:
             base_url=base_url,
         )
         # 为已知 provider_type 种子默认模型
-        spec = PROVIDER_SPECS.get(provider_type)
-        if spec:
-            for model_name in spec.default_models:
+        catalog_entry = PROVIDER_CATALOG.get(provider_type)
+        if catalog_entry:
+            for model_name in catalog_entry.default_models:
                 provider.models.append(
                     ModelConfig(id=str(uuid4()), model_name=model_name, display_name=model_name)
                 )

@@ -8,18 +8,18 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from zhiyu.application.characters import CharacterService
-from zhiyu.application.consolidation_jobs import ConsolidationProcessor
-from zhiyu.application.mcp import McpService
-from zhiyu.application.memories import MemoryService
-from zhiyu.application.memory_jobs import MemoryJobProcessor
-from zhiyu.application.skills import SkillService
-from zhiyu.core.agent.context import build_tool_registry, with_agent_context
-from zhiyu.core.memory.deep_recall import deep_recall
-from zhiyu.core.memory.indexer import rebuild_index
-from zhiyu.core.memory.manager import MemoryManager
-from zhiyu.core.memory.store import MemoryStore
-from zhiyu.core.providers.base import AIProvider, LLMResponse
+from zhiyu.characters.service import CharacterService
+from zhiyu.memory.consolidation_jobs import ConsolidationProcessor
+from zhiyu.mcp.service import McpService
+from zhiyu.memory.service import MemoryService
+from zhiyu.memory.jobs import MemoryJobProcessor
+from zhiyu.skills.service import SkillService
+from zhiyu.agents.context import build_tool_registry, with_agent_context
+from zhiyu.memory.deep_recall import deep_recall
+from zhiyu.memory.indexer import rebuild_index
+from zhiyu.memory.manager import MemoryManager
+from zhiyu.memory.store import MemoryStore
+from zhiyu.providers.base import AIProvider, LLMResponse
 from zhiyu.infrastructure.database.db import Base
 from zhiyu.infrastructure.database.models import Character, Conversation, Identity
 from zhiyu.infrastructure.database.repositories.conversation_repository import ConversationRepository
@@ -28,8 +28,8 @@ from zhiyu.infrastructure.database.repositories.memory_job_repository import Mem
 from zhiyu.infrastructure.database.repositories.memory_repository import MemoryRepository
 from zhiyu.infrastructure.database.repositories.message_repository import MessageRepository
 from zhiyu.infrastructure.database.repositories.provider_repository import ProviderRepository
-from zhiyu.integrations.mcp.manager import McpManager
-from zhiyu.integrations.skills.registry import SkillRegistry
+from zhiyu.mcp.manager import McpManager
+from zhiyu.skills.registry import SkillRegistry
 
 
 @pytest.fixture
@@ -177,7 +177,7 @@ async def test_skill_link_and_read_permissions_are_independent(workspace, tmp_pa
     assert not SkillService(factory, packages).show("research")["enabled"]
     registry = SkillRegistry(packages)
     registry.reload(SkillService(factory, packages).enabled_overrides())
-    import zhiyu.core.agent.context as context
+    import zhiyu.agents.context as context
     monkeypatch.setattr(context, "skill_registry", registry)
     tools = build_tool_registry(McpManager(), session_factory=factory, identity_id=a, character_id=a, memory_store=store)
     assert await tools.get("read_skill").execute("research") == "独立技能正文"

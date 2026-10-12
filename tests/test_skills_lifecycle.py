@@ -6,7 +6,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from zhiyu.application.skills import SkillService
+from zhiyu.skills.service import SkillService
 from zhiyu.infrastructure.database.db import Base
 
 

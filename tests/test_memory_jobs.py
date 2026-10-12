@@ -7,10 +7,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from zhiyu.application.memories import MemoryService
-from zhiyu.application.memory_jobs import MemoryJobProcessor
-from zhiyu.core.memory.store import MemoryStore
-from zhiyu.core.providers.base import AIProvider, LLMResponse
+from zhiyu.memory.service import MemoryService
+from zhiyu.memory.jobs import MemoryJobProcessor
+from zhiyu.memory.store import MemoryStore
+from zhiyu.providers.base import AIProvider, LLMResponse
 from zhiyu.infrastructure.database import models  # noqa: F401
 from zhiyu.infrastructure.database.db import Base
 from zhiyu.infrastructure.database.repositories.conversation_repository import ConversationRepository

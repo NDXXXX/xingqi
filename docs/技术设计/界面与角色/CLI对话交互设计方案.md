@@ -38,11 +38,11 @@
 
 1. **无颜色**：`你>` 与 `星栖>` 同色，多轮后难分彼此。
 2. **思考时像卡住**：`星栖>` 先打印，模型思考或调工具期间一片空白。
-3. **工具调用不可见**：运行时其实会发 `tool` 事件（[runtime.py:106-113](../../../src/zhiyu/core/agent/runtime.py#L106-L113)），但 CLI 丢掉，用户只看到"停顿几秒 → 直接出答案"。
+3. **工具调用不可见**：运行时其实会发 `tool` 事件（[runtime.py:106-113](../../../src/zhiyu/agents/runtime.py#L106-L113)），但 CLI 丢掉，用户只看到"停顿几秒 → 直接出答案"。
 
 ### 2.3 关键发现：思考块目前没有数据源
 
-OpenClaw 的 thinking 块来自模型暴露的推理内容（DeepSeek reasoner 的 `reasoning_content`、Claude 的 extended thinking）。当前 Provider 层在流式与解析时**只提取 `content` 和 `tool_calls`**，[openai_compatible.py](../../../src/zhiyu/core/providers/openai_compatible.py) 的 `_stream` 没有读 `reasoning_content`，`LLMResponse`（[base.py](../../../src/zhiyu/core/providers/base.py)）也没有对应字段。
+OpenClaw 的 thinking 块来自模型暴露的推理内容（DeepSeek reasoner 的 `reasoning_content`、Claude 的 extended thinking）。当前 Provider 层在流式与解析时**只提取 `content` 和 `tool_calls`**，[openai_compatible.py](../../../src/zhiyu/providers/openai_compatible.py) 的 `_stream` 没有读 `reasoning_content`，`LLMResponse`（[base.py](../../../src/zhiyu/providers/base.py)）也没有对应字段。
 
 所以思考块不是"开关没打开"，而是**数据根本没进来**。工具卡片可以立刻做，思考块必须先补推理捕获。
 
@@ -127,7 +127,7 @@ kind-aware 那行：星栖内置工具只有 `calculator` / `datetime`，输入�
 
 ## 5. 事件流映射
 
-现有运行时事件（[runtime.py](../../../src/zhiyu/core/agent/runtime.py)）到界面的映射：
+现有运行时事件（[runtime.py](../../../src/zhiyu/agents/runtime.py)）到界面的映射：
 
 | 事件 `type` | 载荷 | 渲染 | 现状 |
 |---|---|---|---|

@@ -1,6 +1,6 @@
 """Route normalized channel messages through the shared chat service."""
 
-from zhiyu.application.chat import ChatRequest, ChatService, default_chat_service
+from zhiyu.chat.service import ChatRequest, ChatService, default_chat_service
 
 from .base import IncomingMessage
 from .messages import InboundEvent

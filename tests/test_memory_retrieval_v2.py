@@ -7,14 +7,14 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from zhiyu.core.agent.context import with_agent_context
-from zhiyu.core.memory.deep_recall import deep_recall
-from zhiyu.core.memory.retriever import (
+from zhiyu.agents.context import with_agent_context
+from zhiyu.memory.deep_recall import deep_recall
+from zhiyu.memory.retriever import (
     build_query_plan,
     hybrid_rank,
     hybrid_rank_async,
 )
-from zhiyu.core.providers.embedding import save_config
+from zhiyu.providers.embedding import save_config
 from zhiyu.infrastructure.database import models  # noqa: F401
 from zhiyu.infrastructure.database.db import Base
 from zhiyu.infrastructure.database.models import MemoryRecallEvent
@@ -327,7 +327,7 @@ async def test_embedding_timeout_falls_back_to_lexical(monkeypatch):
             await asyncio.sleep(1)
             return [[1.0, 0.0]]
 
-        monkeypatch.setattr("zhiyu.core.providers.embedding.embed_async", slow_embed)
+        monkeypatch.setattr("zhiyu.providers.embedding.embed_async", slow_embed)
         started = time.monotonic()
         trace = await hybrid_rank_async(
             db,

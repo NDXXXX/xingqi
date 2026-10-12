@@ -4,10 +4,10 @@ import asyncio
 
 import httpx
 
-from zhiyu.core.agent.runtime import ProviderCandidate, run_agent, run_agent_stream
-from zhiyu.core.agent.run_manager import ActiveRunManager
-from zhiyu.core.providers.base import AIProvider, LLMResponse, ToolCall
-from zhiyu.core.tools.registry import default_registry
+from zhiyu.agents.runtime import ProviderCandidate, run_agent, run_agent_stream
+from zhiyu.agents.run_manager import ActiveRunManager
+from zhiyu.providers.base import AIProvider, LLMResponse, ToolCall
+from zhiyu.agents.tools.registry import default_registry
 
 
 class FakeProvider(AIProvider):

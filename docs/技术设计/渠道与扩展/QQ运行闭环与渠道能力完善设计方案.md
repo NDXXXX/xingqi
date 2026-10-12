@@ -422,8 +422,8 @@ class ChannelDriver(Protocol):
 ## 10. 预计代码落点
 
 - `src/zhiyu/application/runtime.py`：渠道与恢复任务生命周期。
-- `src/zhiyu/application/channels.py`：账号级配置、启动和状态服务。
-- `src/zhiyu/application/inbound.py`：租约状态机与恢复入口。
+- `src/zhiyu/channels/service.py`：账号级配置、启动和状态服务。
+- `src/zhiyu/channels/reliability.py`：租约状态机与恢复入口。
 - `src/zhiyu/channels/manager.py`：多实例管理。
 - `src/zhiyu/channels/qq/adapter.py`：OneBot 富媒体转换和账号校验。
 - `src/zhiyu/channels/`：小型驱动协议、媒体与投递公共类型。

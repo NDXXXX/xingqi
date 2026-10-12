@@ -5,22 +5,22 @@ import logging
 
 from sqlalchemy import select
 
-from zhiyu.application.chat import ChatService
-from zhiyu.application.characters import CharacterService
-from zhiyu.application.channels import ChannelService
-from zhiyu.application.consolidation_jobs import ConsolidationProcessor
-from zhiyu.application.mcp import CONFIG_REVISION_KEY, McpService
-from zhiyu.application.skills import SkillService
-from zhiyu.application.scheduled_task_jobs import ScheduledTaskProcessor
+from zhiyu.chat.service import ChatService
+from zhiyu.characters.service import CharacterService
+from zhiyu.channels.service import ChannelService
+from zhiyu.memory.consolidation_jobs import ConsolidationProcessor
+from zhiyu.mcp.service import CONFIG_REVISION_KEY, McpService
+from zhiyu.skills.service import SkillService
+from zhiyu.scheduled_tasks.jobs import ScheduledTaskProcessor
 from zhiyu.channels.media import MediaStore
 from zhiyu.channels.manager import ChannelManager
 from zhiyu.channels.router import ChannelRouter
-from zhiyu.integrations.mcp.manager import McpManager
-from zhiyu.integrations.skills.registry import SkillRegistry, default_registry
+from zhiyu.mcp.manager import McpManager
+from zhiyu.skills.registry import SkillRegistry, default_registry
 from zhiyu.infrastructure.database.repositories.setting_repository import SettingRepository
 from zhiyu.infrastructure.database.models import Identity, MemoryFileIndex, MemoryMutation
-from zhiyu.core.memory.indexer import rebuild_index, sync_changed_index
-from zhiyu.core.memory.store import MemoryStore
+from zhiyu.memory.indexer import rebuild_index, sync_changed_index
+from zhiyu.memory.store import MemoryStore
 from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository
 
 

@@ -1,10 +1,10 @@
 """Provider 消息转换与原生流解析测试。"""
 
-import zhiyu.core.providers.openai_compatible as openai_module
-import zhiyu.core.providers.anthropic as anthropic_module
-from zhiyu.core.providers.anthropic import AnthropicProvider
-from zhiyu.core.providers.base import LLMResponse
-from zhiyu.core.providers.openai_compatible import OpenAICompatibleProvider
+import zhiyu.providers.openai_compatible as openai_module
+import zhiyu.providers.anthropic as anthropic_module
+from zhiyu.providers.anthropic import AnthropicProvider
+from zhiyu.providers.base import LLMResponse
+from zhiyu.providers.openai_compatible import OpenAICompatibleProvider
 
 
 def test_anthropic_converts_system_and_tools():

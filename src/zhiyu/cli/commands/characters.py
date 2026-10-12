@@ -2,7 +2,7 @@
 
 import sys
 
-from zhiyu.application.characters import CharacterService
+from zhiyu.characters.service import CharacterService
 
 def _character(args) -> None:
     service = CharacterService()

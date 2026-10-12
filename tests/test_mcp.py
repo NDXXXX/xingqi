@@ -11,10 +11,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from zhiyu.application.mcp import McpService
+from zhiyu.mcp.service import McpService
 from zhiyu.cli.main import _normalize_cli_args, _parser
-from zhiyu.integrations.mcp.connection import McpConnection, McpTool
-from zhiyu.integrations.mcp.manager import McpManager
+from zhiyu.mcp.connection import McpConnection, McpTool
+from zhiyu.mcp.manager import McpManager
 from zhiyu.infrastructure.database.db import Base
 
 
@@ -88,8 +88,8 @@ async def test_connection_namespaces_tools(monkeypatch):
             calls.append((name, arguments))
             return SimpleNamespace(content=[SimpleNamespace(text="ok")])
 
-    monkeypatch.setattr("zhiyu.integrations.mcp.connection.stdio_client", lambda _params: FakeContext())
-    monkeypatch.setattr("zhiyu.integrations.mcp.connection.ClientSession", FakeSession)
+    monkeypatch.setattr("zhiyu.mcp.connection.stdio_client", lambda _params: FakeContext())
+    monkeypatch.setattr("zhiyu.mcp.connection.ClientSession", FakeSession)
 
     connection = McpConnection("filesystem", "fake", [])
     tools = await connection.connect()
@@ -226,7 +226,7 @@ async def test_manager_filters_tools_with_allowlist(monkeypatch):
         async def close(self):
             return None
 
-    monkeypatch.setattr("zhiyu.integrations.mcp.manager.McpConnection", FakeConnection)
+    monkeypatch.setattr("zhiyu.mcp.manager.McpConnection", FakeConnection)
     manager = McpManager()
 
     tools = await manager.connect(

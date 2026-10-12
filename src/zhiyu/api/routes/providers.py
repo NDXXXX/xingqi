@@ -3,7 +3,7 @@
 from dataclasses import asdict
 from fastapi import APIRouter, HTTPException
 
-from zhiyu.application.providers import ProviderService
+from zhiyu.providers.service import ProviderService
 from zhiyu.api.schemas.providers import (
     ModelBody,
     ModelUpdateBody,

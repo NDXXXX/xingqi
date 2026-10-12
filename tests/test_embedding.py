@@ -6,8 +6,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from zhiyu.core.memory.retriever import hybrid_retrieve
-from zhiyu.core.providers.embedding import embed_text_async, load_config, save_config
+from zhiyu.memory.retriever import hybrid_retrieve
+from zhiyu.providers.embedding import embed_text_async, load_config, save_config
 from zhiyu.infrastructure.database import models  # noqa: F401
 from zhiyu.infrastructure.database.db import Base
 from zhiyu.infrastructure.database.models import MemoryEmbedding
@@ -50,10 +50,10 @@ def test_hybrid_retrieve_ranks_by_vector(monkeypatch):
         coffee_id, tea_id = coffee.id, tea.id
 
     monkeypatch.setattr(
-        "zhiyu.core.memory.retriever.embed_text", lambda db, q: ("fake", [1.0, 0.0])
+        "zhiyu.memory.retriever.embed_text", lambda db, q: ("fake", [1.0, 0.0])
     )
     monkeypatch.setattr(
-        "zhiyu.core.memory.retriever.load_vectors",
+        "zhiyu.memory.retriever.load_vectors",
         lambda db, ids, **kwargs: {coffee_id: [1.0, 0.0], tea_id: [0.0, 1.0]},
     )
 
@@ -74,9 +74,9 @@ def test_hybrid_retrieve_falls_back_to_lexical(monkeypatch):
         db.commit()
         coffee_id = coffee.id
 
-    monkeypatch.setattr("zhiyu.core.memory.retriever.embed_text", lambda db, q: None)
+    monkeypatch.setattr("zhiyu.memory.retriever.embed_text", lambda db, q: None)
     monkeypatch.setattr(
-        "zhiyu.core.memory.retriever.load_vectors", lambda db, ids, **kwargs: {}
+        "zhiyu.memory.retriever.load_vectors", lambda db, ids, **kwargs: {}
     )
 
     with factory() as db:
@@ -95,7 +95,7 @@ async def test_async_query_embedding_uses_short_lived_cache(monkeypatch):
         return [[1.0, 2.0]]
 
     monkeypatch.setenv("EMBED_CACHE_TEST", "key")
-    monkeypatch.setattr("zhiyu.core.providers.embedding.embed_async", fake_embed)
+    monkeypatch.setattr("zhiyu.providers.embedding.embed_async", fake_embed)
     with factory() as db:
         save_config(
             db,
@@ -129,7 +129,7 @@ def test_malformed_stored_vector_falls_back_without_breaking_recall(monkeypatch)
         coffee_id = coffee.id
 
     monkeypatch.setattr(
-        "zhiyu.core.memory.retriever.embed_text",
+        "zhiyu.memory.retriever.embed_text",
         lambda db, q: ("broken-model", [1.0, 0.0]),
     )
     with factory() as db:

@@ -1,6 +1,6 @@
 """本机个人助手的人格与对话规则。"""
 
-from zhiyu.core.memory.store import MemoryStore
+from zhiyu.memory.store import MemoryStore
 from zhiyu.infrastructure.database.db import SessionLocal
 from zhiyu.infrastructure.database.repositories.identity_repository import IdentityRepository
 

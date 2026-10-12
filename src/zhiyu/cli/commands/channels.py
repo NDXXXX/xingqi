@@ -8,7 +8,7 @@ import subprocess
 import sys
 from urllib.parse import urlsplit
 
-from zhiyu.application.channels import ChannelService
+from zhiyu.channels.service import ChannelService
 
 async def _qq_listen(service: ChannelService) -> None:
     memory_processor = MemoryJobProcessor()

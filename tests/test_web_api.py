@@ -11,19 +11,19 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from zhiyu.api import create_app
-from zhiyu.application.chat import ChatService
-from zhiyu.application.memories import MemoryService
+from zhiyu.chat.service import ChatService
+from zhiyu.memory.service import MemoryService
 from zhiyu.application.runtime import RuntimeHost
-from zhiyu.application.skills import SkillService
+from zhiyu.skills.service import SkillService
 from zhiyu.channels.manager import ChannelManager
 from zhiyu.channels.router import ChannelRouter
-from zhiyu.core.memory.store import MemoryStore
-from zhiyu.core.providers.base import AIProvider, LLMResponse
+from zhiyu.memory.store import MemoryStore
+from zhiyu.providers.base import AIProvider, LLMResponse
 from zhiyu.infrastructure.database.db import Base
 from zhiyu.infrastructure.database.repositories.provider_repository import (
     ProviderRepository,
 )
-from zhiyu.integrations.mcp.manager import McpManager
+from zhiyu.mcp.manager import McpManager
 
 
 class FakeProvider(AIProvider):
