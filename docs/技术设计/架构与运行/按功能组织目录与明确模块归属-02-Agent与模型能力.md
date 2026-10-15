@@ -76,5 +76,5 @@
 ## 6. 实施记录
 
 - Agent、角色、Provider 和通用工具已迁入目标功能包；Skills 工具归入 `skills/tool.py`。Provider 默认元数据抽到纯 `providers/catalog.py`，Repository 不再导入 Router；Router 继续导出 `PROVIDER_SPECS`。
-- 本批重点测试：128 passed、3 failed；失败为基线已有的 3 项 `test_agent_context.py` 摘要压缩用例。完整测试见第 03 批实施记录。
+- 本批迁移阶段重点测试：128 passed、3 failed；失败为基线已有的 3 项 `test_agent_context.py` 摘要压缩用例。后续已修复摘要预算为 0 时不生成摘要的问题，最终全量结果见第 03 批实施记录。
 - Provider 与相关生产、测试导入已更新；未改变数据库 Schema、Provider 配置或工具授权。

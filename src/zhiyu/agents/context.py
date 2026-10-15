@@ -411,7 +411,7 @@ def _compact_messages(
     if history_chars <= remaining:
         return [*system_messages, *history], None, 0, None
 
-    summary_budget = min(2000, max(240, remaining // 3)) if remaining else 0
+    summary_budget = min(2000, max(240, remaining // 3))
     recent_budget = max(0, remaining - summary_budget)
     rounds = _conversation_rounds(history)
     selected_rounds: list[list[dict]] = []
